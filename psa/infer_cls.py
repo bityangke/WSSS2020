@@ -45,15 +45,21 @@ if __name__ == '__main__':
     parser.add_argument("--voc12_root", default="VOC2012", type=str)
     parser.add_argument("--low_alpha", default=4, type=int)
     parser.add_argument("--high_alpha", default=32, type=int)
-    parser.add_argument("--out_cam", default="RES_CAM_TRAIN_AUG", type=str)
+    parser.add_argument(
+        "--out_cam",
+        default=
+        "RES_CAM_TRAIN_AUG",
+        type=str)
     # parser.add_argument("--out_la_crf", default="RES_CAM_LA_TRAIN", type=str)
     parser.add_argument("--out_la_crf", default=None, type=str)
     # parser.add_argument("--out_la_crf", default=None, type=str)
     # parser.add_argument("--out_ha_crf", default="RES_CAM_HA_VAL", type=str)
     parser.add_argument("--out_ha_crf", default=None, type=str)
-    parser.add_argument("--out_cam_pred",
-                        default="RES_CAM_LABEL_TRAIN_AUG",
-                        type=str)
+    parser.add_argument(
+        "--out_cam_pred",
+        default=
+        "RES_CAM_LABEL_TRAIN_AUG",
+        type=str)
 
     args = parser.parse_args()
     if not os.path.exists(args.out_cam):
