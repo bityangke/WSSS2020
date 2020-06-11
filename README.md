@@ -10,10 +10,10 @@
 
  `cd psa`  # change your path
 ## generate CAM
-python `infer_cls.py`
+`python infer_cls.py`
 
 ## generate Graph and node feature (you have to generate CAM first)
-python `infer_aff.py`
+`python infer_aff.py`
 
 # GCN
 
@@ -23,8 +23,8 @@ python `infer_aff.py`
     2. affinity matrix(Graph)
     3. node feature
 ## GCN training + evaluation 
-- python `train2020.py`
+- `python train2020.py`
 
 ## generate partial pseudo label
-- python `make_dataset.py`
+- `python make_dataset.py`
 
