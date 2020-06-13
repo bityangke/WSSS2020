@@ -2,7 +2,7 @@ import warnings
 import torch as t
 import os
 import getpass
- 
+
 
 class DefaultConfig(object):
     env = 'default'  # visdom 环境
@@ -53,18 +53,14 @@ class DefaultConfig(object):
     path4VOC_root = os.path.join("..", "psa", "VOC2012")
     path4PsaFeature = os.path.join("..", "psa", "aff_map")
     pseudo_label_thre = .95  # threshold for select confident label
-    path4data = os.path.join("..", "..", "..", "work", getpass.getuser(),
-                             "pygcn", "data")
+    path4data = "data"
     path4CAM = os.path.join("..", "psa", "RES_CAM__")
     path4Pseudo_label = os.path.join("..", "psa", "RES_PSEUDO_LABEL(2020)")
     # ===paeameter for dataset =====================================
     graph_path = dict()
-    graph_path['AFF'] = os.path.join("..", "..", "..", "work",
-                                     getpass.getuser(), "psa", "aff_matrix")
-    graph_path['GT'] = os.path.join("..", "..", "..", "work",
-                                    getpass.getuser(), "psa", "graph-full")
-    graph_path['RW'] = os.path.join("..", "..", "..", "work",
-                                    getpass.getuser(), "psa", "VGG_RAM__")
+    graph_path['AFF'] = os.path.join("..", "psa", "aff_matrix")
+    graph_path['GT'] = os.path.join("..", "psa", "graph-full")
+    graph_path['RW'] = os.path.join("..", "psa", "VGG_RAM__")
 
     graph_pre = dict()
     graph_pre['AFF'] = graph_pre['RW'] = ''
@@ -81,6 +77,7 @@ class DefaultConfig(object):
     path4AffGraph = os.path.join("..", "..", "..", "work", getpass.getuser(),
                                  "psa", "aff_matrix")
     # path4node_feat = os.path.join("..", "psa", "AFF_FEATURE_res38")
+    path4node_feat = "../psa/AFF_FEATURE_res38"
     path4train_images = os.path.join("..", "psa", "voc12", "train.txt")
     path4train_aug_images = os.path.join("..", "psa", "voc12", "train_aug.txt")
     path4val_images = os.path.join("..", "psa", "voc12", "val.txt")
@@ -88,19 +85,11 @@ class DefaultConfig(object):
     path4partial_label = "../psa/RES38_PARTIAL_PSEUDO_LABEL_DN"
     # ===paeameter for post process =====================================
     # path4save_img = os.path.join('predict_result_visual_epochs')
-    path4save_img = os.path.join("..", "..", "..", "media", getpass.getuser(),
-                                 "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24",
-                                 "pygcn", "predict_result_visual_epochs")
-    path4save_LP = os.path.join("..", "..", "..", "media", getpass.getuser(),
-                                "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24",
-                                "pygcn", "LP_prediction")
+    path4save_img = os.path.join("..", "predict_result_visual_epochs")
+    path4save_LP = os.path.join("..", "LP_prediction")
     save_prediction_np = True
     path4prediction_np = "predict_result_matrix_visual_new"
-    # path4prediction_np = os.path.join("..", "..", "..", "media",
-    #                                   getpass.getuser(),
-    #                                   "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24",
-    #                                   "pygcn",
-    #                                   "predict_result_matrix_visual_new")
+    # path4prediction_np = os.path.join("..", "predict_result_matrix_visual_new")
     save_mask = True
     path4img = os.path.join("..", "psa", "VOC2012", "JPEGImages")
     output_rate = 8
@@ -111,6 +100,28 @@ class DefaultConfig(object):
     crf_num_iteration = 10
     path4saveCRF = 'predict_result_CRF'
     path4saveCRF_np = 'predict_result_CRF_npy'
+    # === CRF
+    CRF_deeplab = dict()
+    CRF_deeplab["iter_max"] = 10
+    CRF_deeplab["pos_w"] = 3
+    CRF_deeplab["pos_xy_std"] = 1
+    CRF_deeplab["bi_w"] = 4
+    CRF_deeplab["bi_xy_std"] = 67
+    CRF_deeplab["bi_rgb_std"] = 3
+    CRF_psa = dict()
+    CRF_psa["iter_max"] = 10
+    CRF_psa["pos_w"] = 3
+    CRF_psa["pos_xy_std"] = 3
+    CRF_psa["bi_w"] = 10
+    CRF_psa["bi_xy_std"] = 80
+    CRF_psa["bi_rgb_std"] = 13
+    CRF = dict()
+    CRF["iter_max"] = 10
+    CRF["pos_w"] = 3
+    CRF["pos_xy_std"] = 4
+    CRF["bi_w"] = 3
+    CRF["bi_xy_std"] = 83
+    CRF["bi_rgb_std"] = 5
 
     # ===================================================================
 

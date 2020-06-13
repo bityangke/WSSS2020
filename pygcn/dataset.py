@@ -69,10 +69,10 @@ class graph_voc(data.Dataset):
         adj = normalize(adj + sp.eye(adj.shape[0]))
 
         # === load features,train_idx,test_idx, ========================
-        if os.path.basename(args.path4data) == "data":
-            names = ['x', 'y', 'allx', 'ally', 'rgbxy']
-        else:
-            names = ['train_idx', 'test_idx', 'feature', 'labels', 'rgbxy']
+        # if os.path.basename(args.path4data) == "data":
+        #     names = ['x', 'y', 'allx', 'ally', 'rgbxy']
+        # else:
+        #     names = ['train_idx', 'test_idx', 'feature', 'labels', 'rgbxy']
         """
         x: train_idx. list 
         y: test_idx. list
@@ -80,18 +80,18 @@ class graph_voc(data.Dataset):
         ally: labels, pseudo for train_idx, ground truth for test_idx. [np.array]
         rgbxy: another feature for comparison. [np.array]
         """
-        objects = []
-        for i in range(len(names)):
-            with open(
-                    "{}.{}.{}".format(os.path.join(path4data, "ind"), img_name,
-                                      names[i]), 'rb') as f:
-                if sys.version_info > (3, 0):
-                    objects.append(pkl.load(f, encoding='latin1'))
-                else:
-                    objects.append(pkl.load(f))
+        # objects = []
+        # for i in range(len(names)):
+        #     with open(
+        #             "{}.{}.{}".format(os.path.join(path4data, "ind"), img_name,
+        #                               names[i]), 'rb') as f:
+        #         if sys.version_info > (3, 0):
+        #             objects.append(pkl.load(f, encoding='latin1'))
+        #         else:
+        #             objects.append(pkl.load(f))
 
-        train_idx, test_idx, features, labels, rgbxy = tuple(
-            objects)  # xxx_idx format is list
+        # train_idx, test_idx, features, labels, rgbxy = tuple(
+        #     objects)  # xxx_idx format is list
         """ ===           generate bg label and fg label           ===
                               label 轉回non-one-hot
                                   put in tensor
@@ -102,14 +102,14 @@ class graph_voc(data.Dataset):
                 data/.ally do not contain 255
                 and it is one-hot you can't use np.argmax directly
         """
-        if os.path.basename(args.path4data) == "data":
-            # === trasfer to non-ont-hot ===
-            labels = np.argmax(labels, axis=1)  # [H*W]
-            # === transfer [idx1,idx2,...] to [True,False,....] for train_idx
-            bool_arr = np.zeros_like(labels).astype(np.bool)
-            bool_arr[train_idx] = True
-            train_idx = bool_arr  # [H*W]
-            labels[~train_idx] = 255  # ignore region = 255
+        # if os.path.basename(args.path4data) == "data":
+        #     # === trasfer to non-ont-hot ===
+        #     labels = np.argmax(labels, axis=1)  # [H*W]
+        #     # === transfer [idx1,idx2,...] to [True,False,....] for train_idx
+        #     bool_arr = np.zeros_like(labels).astype(np.bool)
+        #     bool_arr[train_idx] = True
+        #     train_idx = bool_arr  # [H*W]
+        #     labels[~train_idx] = 255  # ignore region = 255
 
         labels = Image.open(
             os.path.join(args.path4partial_label, img_name + '.png'))
@@ -125,10 +125,11 @@ class graph_voc(data.Dataset):
         label_bg = labels.copy()
         label_bg[label_bg != 0] = 255
         # === you can delete next 4 lines~~~~
-        idx_fg = np.where((labels != 0) & (labels != 255))
-        idx_bg = np.where(labels == 0)
-        idx_train_fg_t = torch.LongTensor(np.intersect1d(idx_fg, train_idx))
-        idx_train_bg_t = torch.LongTensor(np.intersect1d(idx_bg, train_idx))
+        # idx_fg = np.where((labels != 0) & (labels != 255))
+        # idx_bg = np.where(labels == 0)
+        # train_idx = (labels != 255)
+        # idx_train_fg_t = torch.LongTensor(np.intersect1d(idx_fg, train_idx))
+        # idx_train_bg_t = torch.LongTensor(np.intersect1d(idx_bg, train_idx))
 
         # === transfer to tensor
         labels = torch.LongTensor(labels)
@@ -149,13 +150,23 @@ class graph_voc(data.Dataset):
         f_aff = np.squeeze(f_aff)  # [448,H,W] for vgg| [448,H*W] for res38
         if aff_version != "v3":  # vgg16
             f_aff = np.reshape(f_aff, (np.shape(f_aff)[0], H * W))  # [448,H*W]
-
+        # === RGB feature
+        img_dn = Image.fromarray(img).resize(
+            (W, H), Image.LANCZOS)  # [W,H 3] note!! resize的輸入是(W,H)
+        img_dn = np.asarray(img_dn)  # [H,W,3]
+        feature_rgbxy = np.zeros(shape=(H, W, 5))
+        feature_rgbxy[:, :, :3] = img_dn / 255.  # conpress between 0~1
+        # get xy feature
+        for i in range(H):
+            for j in range(W):
+                feature_rgbxy[i, j, 3] = float(i)
+                feature_rgbxy[i, j, 4] = float(j)
         allx = np.transpose(f_aff, [1, 0])  # [H*W,448]
         features = sparse.csr_matrix(allx)
         feat = torch.FloatTensor(np.array(features.todense()))
-        rgbxy = torch.FloatTensor(rgbxy)
+        rgbxy = torch.FloatTensor(feature_rgbxy)
         adj = torch.FloatTensor(adj.toarray())
-        return adj, feat, labels, rgbxy, img_name, label_fg_t, label_bg_t, idx_train_fg_t, idx_train_bg_t
+        return adj, feat, labels, rgbxy, img_name, label_fg_t, label_bg_t
 
     def __getitem__(self, index):
         """
@@ -233,7 +244,7 @@ if __name__ == "__main__":
     from utils import show_timing
     t_start = time.time()
     for i, item in enumerate(dataset):
-        adj, features, labels, rgbxy, img_name, label_fg_t, label_bg_t, idx_train_fg_t, idx_train_bg_t = item
+        adj, features, labels, rgbxy, img_name, label_fg_t, label_bg_t = item
         print(img_name)
         print("shape(features):", np.shape(features))
         print("labels.shape {}  time: {}".format(
