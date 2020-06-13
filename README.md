@@ -1,3 +1,12 @@
+## Folder structure
+- /home/User
+    - pygcn
+        - ~~data_v8~~
+    - psa
+        - AFF_MAT_normalize
+        - AFF_FEATURE_res38
+        - RES38_PARTIAL_PSEUDO_LABEL_DN
+
 ## Enviroment
 - pytorch 1.4.0
 - scipy 1.2.0
@@ -22,9 +31,9 @@
     1. partial pseudo label
     2. affinity matrix(Graph)
     3. node feature
-## GCN training + evaluation 
-- `python train2020.py`
 
 ## generate partial pseudo label
-- `python make_dataset.py`
+- `python make_dataset.py` # generate 3 folders of data for training of GCN
 
+## GCN training + evaluation 
+- `python train2020.py`
