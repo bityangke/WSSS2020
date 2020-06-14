@@ -212,29 +212,6 @@ def gaussian_propagator(features):
     return S.cuda()
 
 
-def gaussian_propagator_sparse(features):
-    """
-    Calculus gaussian kernal propagator for label propagation 
-    ---
-    features: a [num_nodes, len_feature] tensor
-    e.g. for 10 nodes RGBXY the features.shape=(10,5)
-    return the tensor (cpu)
-    # """
-    pass
-    # output = features.cpu()  # [n,f]
-    # num_nodes, len_feature = output.shape
-    # rgbxy_repeate = output.repeat(num_nodes, 1)  # [n,f]
-    # rgbxy_np = output.numpy()
-    # rgbxy = torch.from_numpy(rgbxy_np.repeat(num_nodes, 0))  # .cuda()
-    # rgbxy = rgbxy - rgbxy_repeate
-    # rgbxy = rgbxy.permute(1, 0)
-    # rgbxy = rgbxy.view(len_feature, num_nodes,
-    #                    num_nodes)  # 5 is the dim of feature (i.e. rgbxy)
-    # # variance was already absorted to RGBXY, so we don't devide variance here
-    # S = torch.exp(-torch.pow(torch.norm(rgbxy, dim=0), 2) / 2.)
-    # return S.cuda()
-
-
 def evaluate_IoU(model=None,
                  features=None,
                  rgbxy=None,
@@ -339,30 +316,20 @@ def train(**kwargs):
     train_dataloader = graph_voc()
 
     # === for each image, do training and testing in the same graph
-    for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
-             label_bg_t, idx_train_fg_t,
-             idx_train_bg_t) in enumerate(train_dataloader):
-        # === use RGBXY as feature
-        if args.use_RGBXY:
-            rgbxy_t = normalize_rgbxy(rgbxy_t)
-            features_t = rgbxy_t.clone()
-
-        # === build graph by rgbxy feature
-        # === transform shape [H,W,5] to [5,H,W]
-
+    for ii, data in enumerate(train_dataloader):
         # === only RGB as feature
         # adj_t = gaussian_propagator(
         #     features=rgbxy_t.permute(2, 0, 1)[:3, :, :])
 
         # === Model and optimizer
-        img_label = load_image_label_from_xml(img_name=img_name,
+        img_label = load_image_label_from_xml(img_name=data["img_name"],
                                               voc12_root=args.path4VOC_root)
         img_class = [idx + 1 for idx, f in enumerate(img_label) if int(f) == 1]
         num_class = np.max(img_class) + 1
         # debug("num_class: {}  {}".format(num_class + 1, type(num_class + 1)),
         #       line=290)
         model = GCN(
-            nfeat=features_t.shape[1],
+            nfeat=data["features_t"].shape[1],
             nhid=args.num_hid_unit,
             # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
             # image label don't have BG
@@ -377,19 +344,16 @@ def train(**kwargs):
         # ==== moving tensor to GPU
         if args.cuda:
             model.cuda()
-            features_t = features_t.cuda()
-            adj_t = adj_t.cuda()
-            labels_t = labels_t.cuda()
-            idx_train_fg_t = idx_train_fg_t.cuda()
-            idx_train_bg_t = idx_train_bg_t.cuda()
-            label_fg_t = label_fg_t.cuda()
-            label_bg_t = label_bg_t.cuda()
-            # idx_test_t = idx_test_t.cuda()  # bool
+            features_t = data["features_t"].cuda()
+            adj_t = data["adj_t"].cuda()
+            data["labels_t"] = data["labels_t"].cuda()
+            data["label_fg_t"] = data["label_fg_t"].cuda()
+            data["label_bg_t"] = data["label_bg_t"].cuda()
 
         # === save the prediction before training
         if args.save_mask_before_train:
             model.eval()
-            postprocess_image_save(img_name=img_name,
+            postprocess_image_save(img_name=data["img_name"],
                                    model_output=model(features_t,
                                                       adj_t).detach(),
                                    epoch=0)
@@ -398,44 +362,25 @@ def train(**kwargs):
         t4epoch = time.time()
         criterion_ent = HLoss()
         criterion_sym = symmetricLoss()
-        print("fg label: ", torch.unique(label_fg_t))
-        print("bg label: ", torch.unique(label_bg_t))
+        print("fg label: ", torch.unique(data["label_fg_t"]))
+        print("bg label: ", torch.unique(data["label_bg_t"]))
         print("img_class: ", img_class)
         for epoch in range(args.max_epoch):
             model.train()
             optimizer.zero_grad()
             output = model(features_t, adj_t)
-            # print("label_fg_t.min()",label_fg_t.min())
-            # print("output.argmax(dim=1)",output.argmax(dim=1))
-            # input("[336]--------<")
+          
             # === seperate FB/BG label
-            loss_fg = F.nll_loss(output, label_fg_t, ignore_index=255)
-            loss_bg = F.nll_loss(output, label_bg_t, ignore_index=255)
-            # F.log_softmax(label_fg_t, dim=1)
-            # loss_entmin = criterion_ent(output, labels_t, ignore_index=255)
-            # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
+            loss_fg = F.nll_loss(output, data["label_fg_t"], ignore_index=255)
+            loss_bg = F.nll_loss(output, data["label_bg_t"], ignore_index=255)
+          
             loss = loss_fg + loss_bg
 
-            # loss = F.nll_loss(output, labels_t, ignore_index=255)
-
             if loss is None:
-                print("skip this image: ", img_name)
+                print("skip this image: ", data["img_name"])
                 break
 
-            # === for normalize cut
-            # lamda = args.lamda
-            # n_cut = 0.
-            # if args.use_regular_NCut:
-            #     W = gaussian_propagator(output)
-            #     d = torch.sum(W, dim=1)
-            #     for k in range(output.shape[1]):
-            #         s = output[idx_test_t, k]
-            #         n_cut = n_cut + torch.mm(
-            #             torch.mm(torch.unsqueeze(s, 0), W),
-            #             torch.unsqueeze(1 - s, 1)) / (torch.dot(d, s))
-
             # === calculus loss & updated parameters
-            # loss_train = loss.cuda() + lamda * n_cut
             loss_train = loss.cuda()
             loss_train.backward()
             optimizer.step()
@@ -448,7 +393,7 @@ def train(**kwargs):
                 evaluate_IoU(model=model,
                              features=features_t,
                              adj=adj_t,
-                             img_name=img_name,
+                             img_name=data["img_name"],
                              epoch=args.max_epoch,
                              img_idx=ii + 1,
                              writer=writer,
@@ -496,10 +441,11 @@ def train_laplacian(**kwargs):
     # === dataset
     train_dataloader = graph_voc()
 
+    # === build RGB Laplacian graph
+
     # === for each image, do training and testing in the same graph
     for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
-             label_bg_t, idx_train_fg_t,
-             idx_train_bg_t) in enumerate(train_dataloader):
+             label_bg_t) in enumerate(train_dataloader):
 
         # === build graph by rgbxy feature
         if args.use_Biliteral_graph:
@@ -515,7 +461,7 @@ def train_laplacian(**kwargs):
         model = GCN(
             nfeat=features_t.shape[1],
             nhid=args.num_hid_unit,
-            nclass=args.num_class,  # image label don't have BG
+            nclass=num_class,  # image label don't have BG
             dropout=args.drop_rate)
         optimizer = optim.Adam(model.parameters(),
                                lr=args.lr,
@@ -527,11 +473,8 @@ def train_laplacian(**kwargs):
             features_t = features_t.cuda()
             adj_t = adj_t.cuda()
             labels_t = labels_t.cuda()
-            idx_train_fg_t = idx_train_fg_t.cuda()
-            idx_train_bg_t = idx_train_bg_t.cuda()
             label_fg_t = label_fg_t.cuda()
             label_bg_t = label_bg_t.cuda()
-            # idx_test_t = idx_test_t.cuda()  # bool
 
         # === save the prediction before training
         if args.save_mask_before_train:
@@ -550,18 +493,12 @@ def train_laplacian(**kwargs):
             model.train()
             optimizer.zero_grad()
             output = model(features_t, adj_t)
-            # print("label_fg_t.min()",label_fg_t.min())
-            # print("output.argmax(dim=1)",output.argmax(dim=1))
-            # input("[336]--------<")
+           
             # === seperate FB/BG label
             loss_fg = F.nll_loss(output, label_fg_t, ignore_index=255)
             loss_bg = F.nll_loss(output, label_bg_t, ignore_index=255)
-            # F.log_softmax(label_fg_t, dim=1)
-            # loss_entmin = criterion_ent(output, labels_t, ignore_index=255)
-            # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
+           
             loss = loss_fg + loss_bg
-
-            # loss = F.nll_loss(output, labels_t, ignore_index=255)
 
             if loss is None:
                 print("skip this image: ", img_name)
@@ -580,7 +517,6 @@ def train_laplacian(**kwargs):
             #             torch.unsqueeze(1 - s, 1)) / (torch.dot(d, s))
 
             # === calculus loss & updated parameters
-            # loss_train = loss.cuda() + lamda * n_cut
             loss_train = loss.cuda()
             loss_train.backward()
             optimizer.step()
@@ -622,29 +558,21 @@ if __name__ == "__main__":
 
     # =======specify the paath and argument ===============
     path4AFF = "AFF_MAT_normalize"  # "aff_map_normalize" | "AFF_MAT_normalize"
-    args.parse(
-        path4data="data_v8",
-        # data_RES_UP_CRF_DN_TRAIN| data_RES_UP_CRF_DN | data_RES_UP_CRF_DN_VAL
-        hid_unit=40,
-        max_epoch=250,
-        drop_rate=.3,
-        # path4AffGraph=os.path.join("..", "..", "..", "work", getpass.getuser(),
-        #                            "psa", path4AFF),
-        path4AffGraph=os.path.join("..", "..", "..", "work", getpass.getuser(),
-                                   "psa", path4AFF),
-        path4train_images=args.path4train_images,
-        path4partial_label=os.path.join(
-            "..", "psa", "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL_DN_ASUS"),
-        path4node_feat=os.path.join("..", "psa", "AFF_FEATURE_res38"),
-        use_LP=False)  # args.path4train_images | args.path4val_images
-    descript = "+LP dataset: {}, graph: {}, feature: {}, partial label: {}".format(
+    args.parse(hid_unit=40,
+               max_epoch=250,
+               drop_rate=.3,
+               path4AffGraph=os.path.join("..", "psa", path4AFF),
+               path4partial_label="../psa/RES38_PARTIAL_PSEUDO_LABEL_DN",
+               path4node_feat="../psa/AFF_FEATURE_res38",
+               use_LP=False)
+    descript = "dataset: {}, graph: {}, feature: {}, partial label: {}".format(
         os.path.basename(args.path4data), os.path.basename(args.path4AffGraph),
         os.path.basename(args.path4node_feat),
         os.path.basename(args.path4partial_label))
     print("descript ", descript)
-    print("here is branch `debug` !!")
     # ====  training  =======
     train(use_crf=False, descript=descript)
-    evaluate_dataset_IoU(predicted_folder=os.path.join(args.path4save_img,
+    evaluate_dataset_IoU(file_list=args.path4train_aug_images,
+                         predicted_folder=os.path.join(args.path4save_img,
                                                        "250"),
                          descript=descript)
