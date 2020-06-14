@@ -2,6 +2,10 @@
 - /home/User
     - pygcn
         - ~~data_v8~~
+        - predict_result_matrix_visual_new
+            - 250
+        - predict_result_visual_epochs
+            - 250
     - psa
         - AFF_MAT_normalize
         - AFF_FEATURE_res38
@@ -18,10 +22,10 @@
 - [the weight of affinityNet](https://drive.google.com/open?id=1mFvTH3siw0SS0vqPH0o9N3cI_ISQacwt)
 
  `cd psa`  # change your path
-## Generate CAM
+## generate CAM
 `python infer_cls.py`
 
-## Generate Graph and node feature (you have to generate CAM first)
+## generate Graph and node feature (you have to generate CAM first)
 `python infer_aff.py`
 
 # GCN
@@ -32,8 +36,12 @@
     2. affinity matrix(Graph)
     3. node feature
 
-## Generate partial pseudo label
+## generate partial pseudo label
 - `python make_dataset.py` # generate 3 folders of data for training of GCN
 
 ## GCN training + evaluation 
 - `python train2020.py`
+
+## apply denseCRF to GCN prediction
+- `python CRF.py apply`
+- `python CRF.py help` # show more detail
