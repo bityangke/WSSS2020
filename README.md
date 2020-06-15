@@ -11,6 +11,14 @@
         - AFF_FEATURE_res38
         - RES38_PARTIAL_PSEUDO_LABEL_DN
     - semi_VCIP2020
+        - data
+            - datasets
+            - models\coco\deeplabv1_resnet101\caffemodel\deeplabv1_resnet101-coco.pth
+        - deeplab
+        - libs
+            - models
+            - utils
+        - deeplab_res101_ImageNetPretrain
 
 ## Enviroment
 - pytorch 1.4.0
