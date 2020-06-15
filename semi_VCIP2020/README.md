@@ -2,7 +2,10 @@
 >`python main.py train`
 
 ## Testing
->`python main.py test`
+>`python main.py test --[arg]=[arg Value]`
+- arg:
+    - model_iteration
+    - save_class
 
-## Change parameter
-- 
+## Parameter
+- `confings/voc12.yaml`  # directly change the value in `voc12.yaml`
