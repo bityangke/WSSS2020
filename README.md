@@ -54,3 +54,17 @@
 ## apply denseCRF to GCN prediction
 - `python CRF.py apply`
 - `python CRF.py help` # show more detail
+
+# DeepLab v2
+ `cd semi_VCIP2020`  # change your path
+## Train
+>`python main.py train`
+
+## Testing
+>`python main.py test --[arg]=[arg Value]`
+- arg:
+    - model_iteration
+    - save_class
+
+## Parameter
+- `confings/voc12.yaml`  # directly change the value in `voc12.yaml`
