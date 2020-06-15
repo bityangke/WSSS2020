@@ -10,6 +10,7 @@
         - AFF_MAT_normalize
         - AFF_FEATURE_res38
         - RES38_PARTIAL_PSEUDO_LABEL_DN
+    - semi_VCIP2020
 
 ## Enviroment
 - pytorch 1.4.0
