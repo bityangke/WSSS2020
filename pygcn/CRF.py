@@ -230,7 +230,7 @@ def apply(**kwargs):
     # === load parameter
     for k, v in kwargs.items():
         if k in parameter_dict.keys():
-            parameter_dict[k] = eval(v)
+            parameter_dict[k] = v
             print("{}: {}".format(k, parameter_dict[k]))
         else:
             print("There is no parameter: {}".format(k))
