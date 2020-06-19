@@ -55,6 +55,8 @@
 ## apply denseCRF to GCN prediction
 - `python CRF.py apply`
 - `python CRF.py help` # show more detail
+## apply denseCRF to RW
+- `python CRF.py apply --pred_root='your/rw/path'`
 
 # DeepLab v2
  `cd semi_VCIP2020`  # change your path
