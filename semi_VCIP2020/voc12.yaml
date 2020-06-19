@@ -1,0 +1,75 @@
+EXP:
+    ID: voc12
+    OUTPUT_DIR: data
+    EVALUATE_ITER: 250
+    SAVE_PRED: ../work/u7577591/semi_VCIP2020/data/predicted_label
+    GPU_IDX: [0, 1, 2, 3, 4, 5, 6, 7]
+ 
+DATASET:
+    NAME: vocaug  # vocaug|voc
+    ROOT: ../psa
+    DIRECTORY: '../psa/VOC2012' # add
+    LIST_PATH: '../psa/voc12/train_aug.txt' # train_aug.txt | train.txt
+    VAL_LIST_PATH: '../psa/voc12/val.txt'
+    LABELS: ./data/datasets/voc12/labels.txt
+    # SEG_LABEL: "mIoU=62p44@feature=res38@GRAPH=aff_map_normalize@CAM=res38@CRF_new=T" # RES_RW | SegmentationClassAug
+    SEG_LABEL: "CRF_predict" # CRF_predict | RW_CRF | RES_RW | SegmentationClassAug
+    # SEG_LABEL: "OursSudoLabel62p46" # RW_CRF | RES_RW | SegmentationClassAug
+    # SEG_LABEL: "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL_UP"
+    N_CLASSES: 21
+    IGNORE_LABEL: 255
+    SCALES: [0.5, 0.75, 1.0, 1.25, 1.5]
+    RANDOM:
+        SCALE: True
+        MIRROR: True
+    SPLIT:
+        TRAIN: train  # train_aug | train
+        VAL: val
+        TEST: test
+
+DATALOADER:
+    NUM_WORKERS: 8
+
+IMAGE:
+    MEAN:
+        R: 122.675
+        G: 116.669
+        B: 104.008
+    SIZE:
+        BASE: # None
+        TRAIN: 321
+        TEST: 513
+
+MODEL:
+    # NAME: DeepLabV2_ResNet101_MSC
+    NAME: DeepLabV2_DRN105_MSC
+    N_BLOCKS: [3, 4, 23, 3]
+    ATROUS_RATES: [6, 12, 18, 24]
+    INIT_MODEL: data/models/imageNet/deeplabv2_drn105/drn_d_105-12b40979.pth
+    # INIT_MODEL: data/models/coco/deeplabv1_resnet101/caffemodel/deeplabv1_resnet101-coco.pth
+    SAVE_PATH: ../work/u7577591/semi_VCIP2020/data/checkpoints 
+    SAVE_EVERY_ITER: 250
+
+SOLVER:
+    BATCH_SIZE:
+        TRAIN: 10
+        TEST: 1
+    ITER_MAX: 24000
+    ITER_SIZE: 1
+    ITER_SAVE: 5000
+    ITER_TB: 100
+    LR_DECAY: 10
+    LR: 2.5e-4
+    MOMENTUM: 0.9
+    OPTIMIZER: sgd
+    POLY_POWER: 0.9
+    WEIGHT_DECAY: 5.0e-4
+    AVERAGE_LOSS: 20
+
+CRF:
+    ITER_MAX: 10
+    POS_W: 3
+    POS_XY_STD: 1
+    BI_W: 4
+    BI_XY_STD: 67
+    BI_RGB_STD: 3

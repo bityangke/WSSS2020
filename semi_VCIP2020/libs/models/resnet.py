@@ -30,15 +30,24 @@ class _ConvBnReLU(nn.Sequential):
 
     BATCH_NORM = _BATCH_NORM
 
-    def __init__(
-        self, in_ch, out_ch, kernel_size, stride, padding, dilation, relu=True
-    ):
+    def __init__(self,
+                 in_ch,
+                 out_ch,
+                 kernel_size,
+                 stride,
+                 padding,
+                 dilation,
+                 relu=True):
         super(_ConvBnReLU, self).__init__()
         self.add_module(
             "conv",
-            nn.Conv2d(
-                in_ch, out_ch, kernel_size, stride, padding, dilation, bias=False
-            ),
+            nn.Conv2d(in_ch,
+                      out_ch,
+                      kernel_size,
+                      stride,
+                      padding,
+                      dilation,
+                      bias=False),
         )
         self.add_module("bn", _BATCH_NORM(out_ch, eps=1e-5, momentum=0.999))
 
@@ -50,17 +59,16 @@ class _Bottleneck(nn.Module):
     """
     Bottleneck block of MSRA ResNet.
     """
-
     def __init__(self, in_ch, out_ch, stride, dilation, downsample):
         super(_Bottleneck, self).__init__()
         mid_ch = out_ch // _BOTTLENECK_EXPANSION
         self.reduce = _ConvBnReLU(in_ch, mid_ch, 1, stride, 0, 1, True)
-        self.conv3x3 = _ConvBnReLU(mid_ch, mid_ch, 3, 1, dilation, dilation, True)
+        self.conv3x3 = _ConvBnReLU(mid_ch, mid_ch, 3, 1, dilation, dilation,
+                                   True)
         self.increase = _ConvBnReLU(mid_ch, out_ch, 1, 1, 0, 1, False)
         self.shortcut = (
             _ConvBnReLU(in_ch, out_ch, 1, stride, 0, 1, False)
-            if downsample
-            else lambda x: x  # identity
+            if downsample else lambda x: x  # identity
         )
 
     def forward(self, x):
@@ -75,8 +83,13 @@ class _ResLayer(nn.Sequential):
     """
     Residual layer with multi grids
     """
-
-    def __init__(self, n_layers, in_ch, out_ch, stride, dilation, multi_grids=None):
+    def __init__(self,
+                 n_layers,
+                 in_ch,
+                 out_ch,
+                 stride,
+                 dilation,
+                 multi_grids=None):
         super(_ResLayer, self).__init__()
 
         if multi_grids is None:
@@ -103,7 +116,6 @@ class _Stem(nn.Sequential):
     The 1st conv layer.
     Note that the max pooling is different from both MSRA and FAIR ResNet.
     """
-
     def __init__(self, out_ch):
         super(_Stem, self).__init__()
         self.add_module("conv1", _ConvBnReLU(3, out_ch, 7, 2, 3, 1))
@@ -118,7 +130,7 @@ class _Flatten(nn.Module):
 class ResNet(nn.Sequential):
     def __init__(self, n_classes, n_blocks):
         super(ResNet, self).__init__()
-        ch = [64 * 2 ** p for p in range(6)]
+        ch = [64 * 2**p for p in range(6)]
         self.add_module("layer1", _Stem(ch[0]))
         self.add_module("layer2", _ResLayer(n_blocks[0], ch[0], ch[2], 1, 1))
         self.add_module("layer3", _ResLayer(n_blocks[1], ch[2], ch[3], 2, 1))

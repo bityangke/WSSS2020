@@ -1,4 +1,4 @@
-from model import DeepLabV2
+# from model import DeepLabV2
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -48,6 +48,27 @@ SEG_ID_TO_NAME = dict(zip(np.arange(len(SEG_LIST)), SEG_LIST))
 CLS_NAME_TO_ID = dict(zip(SEG_LIST[1:], range(len(SEG_LIST[1:]))))
 CLS_ID_TO_NAME = dict(zip(np.arange(len(SEG_LIST[1:])), SEG_LIST[1:]))
 
+# BATCH_SIZE = 10
+# DATA_DIRECTORY = '../psa/VOC2012'
+# # DATA_LIST_PATH = './dataset/list/train_aug.txt'
+# DATA_LIST_PATH = '../psa/voc12/train.txt'
+# VAL_DATA_LIST_PATH = '../psa/voc12/val.txt'
+# IGNORE_LABEL = 255
+# INPUT_SIZE = '321,321'
+# LEARNING_RATE = 2.5e-4
+# MOMENTUM = 0.9
+# NUM_CLASSES = 21
+# NUM_STEPS = 20000
+# POWER = 0.9
+# RANDOM_SEED = 1234
+# RESTORE_FROM = './dataset/MS_DeepLab_resnet_pretrained_COCO_init.pth'
+# SAVE_NUM_IMAGES = 2
+# SAVE_PRED_EVERY = 1000
+# SNAPSHOT_DIR = './snapshots/'
+# EVALUATE_EVERY = 200
+# WEIGHT_DECAY = 0.0005
+# TRAIN_LABEL = "SegmentationClass"  # "RES_RW"
+# GPU_IDX = [0, 1, 2, 3, 4, 5, 6, 7]
 CONFIG_PATH = 'configs/voc12.yaml'
 
 ya_config = yaml.load(open(CONFIG_PATH), Loader=yaml.FullLoader)
@@ -117,15 +138,6 @@ def evaluate_gpu(model, writer, train_iter, save_class=False):
     torch.set_grad_enabled(False)
     device = get_device(torch.cuda.is_available())
     model.eval()
-
-    # === save predict result in .png
-    if save_class:
-        save_dir_class = os.path.join(
-            CONFIG.EXP.SAVE_PRED,
-            "classes",
-        )
-        if not os.path.exists(save_dir_class):
-            os.makedirs(save_dir_class)
 
     testloader = data.DataLoader(VOCDataSet(CONFIG.DATASET.DIRECTORY,
                                             CONFIG.DATASET.VAL_LIST_PATH,
@@ -271,7 +283,7 @@ def evaluate(model, writer, train_iter, save_class=False, save_logit=False):
     writer.add_scalar("meanIoU", score["Mean IoU"], train_iter)
 
 
-def show_timing(time_start, time_end):
+def show_timing(time_start, time_end, show=False):
     """
     Show timimg in the format: h m s
     ===
@@ -281,9 +293,12 @@ def show_timing(time_start, time_end):
     - you code/function you want to timing  
     - show_timing(t_start,time.time())
     """
-    print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
+    time_hms = "Total time elapsed: {:.0f} h {:.0f} m {:.0f} s".format(
         (time_end - time_start) // 3600, (time_end - time_start) / 60 % 60,
-        (time_end - time_start) % 60))
+        (time_end - time_start) % 60)
+    if show:
+        print(time_hms)
+    return time_hms
 
 
 def lr_poly(base_lr, iter, max_iter, power):
@@ -347,7 +362,7 @@ def test(cuda=torch.cuda.is_available(), model_iteration=None,
     Evaluation on validation set
     """
     time_now = datetime.datetime.today()
-    time_now = "{}-{}-{}  {}:{}".format(time_now.year, time_now.month,
+    time_now = "{}_{}_{}_{}h{}m".format(time_now.year, time_now.month,
                                         time_now.day, time_now.hour,
                                         time_now.minute)
     # Configuration
@@ -392,6 +407,7 @@ def test(cuda=torch.cuda.is_available(), model_iteration=None,
 
     # for the case that model weight name like "base.aspp.c1.weight"
     if model_path == "VOC12_7499.pth":
+
         def load_weight(state_dict, model):
             for k, v in state_dict.items():
                 # print("key:{}".format(k))
@@ -399,6 +415,7 @@ def test(cuda=torch.cuda.is_available(), model_iteration=None,
                 # print("new_key:{}".format(new_k))
                 # print("==================")
                 model.load_state_dict({new_k: v}, strict=False)
+
         return model
         print("there is 'base' in state_dict")
         load_weight(state_dict, model)  # use for Our 60.10
@@ -482,8 +499,8 @@ def test(cuda=torch.cuda.is_available(), model_iteration=None,
                                    os.path.join(save_dir_class,
                                                 name[0] + '.png'))
 
-    show_timing(t_start, time.time())
     aveJ, j_list, M = get_iou(data_list, CONFIG.DATASET.N_CLASSES)
+    print(show_timing(t_start, time.time()))
     print("=" * 34)
     for idx, iu_class in enumerate(j_list):
         print("{:12}: {:>17.2f} %".format(SEG_ID_TO_NAME[idx], iu_class * 100))
@@ -552,13 +569,12 @@ def train():
 
     # 使用iter(dataloader)返回的是一个迭代器，可以使用next访问
     # loader_iter = iter(trainloader)
- 
+
     # === 3.Create network & weights ===
     print("Model:", CONFIG.MODEL.NAME)
-    assert (CONFIG.MODEL.NAME == "DeepLabV2_ResNet101_MSC"
-            ), 'Currently support only "DeepLabV2_ResNet101_MSC"'
 
-    model = DeepLabV2_ResNet101_MSC(n_classes=CONFIG.DATASET.N_CLASSES)
+    # model = DeepLabV2_ResNet101_MSC(n_classes=CONFIG.DATASET.N_CLASSES)
+    model = DeepLabV2_DRN105_MSC(n_classes=CONFIG.DATASET.N_CLASSES)
     state_dict = torch.load(CONFIG.MODEL.INIT_MODEL)
     # model.base.load_state_dict(state_dict, strict=False)  # to skip ASPP
     print("    Init:", CONFIG.MODEL.INIT_MODEL)
@@ -642,9 +658,10 @@ def train():
 
         # TensorBoard
         writer.add_scalar("loss", average_loss.value()[0], global_step=i_iter)
-        print('iter/max_iter = [{}/{}]  completed, loss = {:4.3}'.format(
-            i_iter, CONFIG.SOLVER.ITER_MAX,
-            average_loss.value()[0]))
+        print(
+            'iter/max_iter = [{}/{}]  completed, loss = {:4.3} time:{}'.format(
+                i_iter, CONFIG.SOLVER.ITER_MAX,
+                average_loss.value()[0], show_timing(time_start, time.time())))
         # print('iter = ', i_iter, 'of', args.num_steps, '',
         #       loss.data.cpu().numpy())
 
@@ -662,7 +679,7 @@ def train():
             print("Evaluation....")
             evaluate_gpu(model, writer, i_iter)
 
-        # === Save model every 500 iteration==========================
+        # === Save model every 250 iteration==========================
         # because DataParalel will add 'module' in each name of layer.
         # so here use model.module.state_dict()
         # ============================================================
@@ -672,8 +689,6 @@ def train():
                 model.module.state_dict(),
                 osp.join(CONFIG.MODEL.SAVE_PATH,
                          'VOC12_{}.pth'.format(i_iter)))
-
-        show_timing(time_start, time.time())
 
 
 if __name__ == "__main__":

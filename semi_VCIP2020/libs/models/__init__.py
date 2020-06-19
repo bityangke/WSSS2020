@@ -5,15 +5,21 @@ from .deeplabv2 import *
 from .deeplabv3 import *
 from .deeplabv3plus import *
 from .msc import *
+from .DRN import *
+# from .DeepLabV2_DRN105 import *
 
 
 def init_weights(module):
     if isinstance(module, nn.Conv2d):
-        nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.kaiming_normal_(module.weight,
+                                mode="fan_out",
+                                nonlinearity="relu")
         if module.bias is not None:
             nn.init.constant_(module.bias, 0)
     elif isinstance(module, nn.Linear):
-        nn.init.kaiming_normal_(module.weight, mode="fan_out", nonlinearity="relu")
+        nn.init.kaiming_normal_(module.weight,
+                                mode="fan_out",
+                                nonlinearity="relu")
         if module.bias is not None:
             nn.init.constant_(module.bias, 0)
     elif isinstance(module, nn.BatchNorm2d):
@@ -32,18 +38,26 @@ def DeepLabV1_ResNet101(n_classes):
 
 def DeepLabV2_ResNet101_MSC(n_classes):
     return MSC(
-        base=DeepLabV2(
-            n_classes=n_classes, n_blocks=[3, 4, 23, 3], atrous_rates=[6, 12, 18, 24]
-        ),
+        base=DeepLabV2(n_classes=n_classes,
+                       n_blocks=[3, 4, 23, 3],
+                       atrous_rates=[6, 12, 18, 24]),
+        scales=[0.5, 0.75],
+    )
+
+
+def DeepLabV2_DRN105_MSC(n_classes):
+    return MSC(
+        base=DeepLabV2_DRN105(n_classes=n_classes,
+                              atrous_rates=[3, 6, 9, 12]),
         scales=[0.5, 0.75],
     )
 
 
 def DeepLabV2S_ResNet101_MSC(n_classes):
     return MSC(
-        base=DeepLabV2(
-            n_classes=n_classes, n_blocks=[3, 4, 23, 3], atrous_rates=[3, 6, 9, 12]
-        ),
+        base=DeepLabV2(n_classes=n_classes,
+                       n_blocks=[3, 4, 23, 3],
+                       atrous_rates=[3, 6, 9, 12]),
         scales=[0.5, 0.75],
     )
 

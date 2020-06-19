@@ -12,19 +12,25 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .resnet import _ConvBnReLU, _ResLayer, _Stem
+from .DRN import drn_d_105
 
 
 class _ASPP(nn.Module):
     """
     Atrous spatial pyramid pooling (ASPP)
     """
-
     def __init__(self, in_ch, out_ch, rates):
         super(_ASPP, self).__init__()
         for i, rate in enumerate(rates):
             self.add_module(
                 "c{}".format(i),
-                nn.Conv2d(in_ch, out_ch, 3, 1, padding=rate, dilation=rate, bias=True),
+                nn.Conv2d(in_ch,
+                          out_ch,
+                          3,
+                          1,
+                          padding=rate,
+                          dilation=rate,
+                          bias=True),
             )
 
         for m in self.children():
@@ -40,10 +46,9 @@ class DeepLabV2(nn.Sequential):
     DeepLab v2: Dilated ResNet + ASPP
     Output stride is fixed at 8
     """
-
     def __init__(self, n_classes, n_blocks, atrous_rates):
         super(DeepLabV2, self).__init__()
-        ch = [64 * 2 ** p for p in range(6)]
+        ch = [64 * 2**p for p in range(6)]
         self.add_module("layer1", _Stem(ch[0]))
         self.add_module("layer2", _ResLayer(n_blocks[0], ch[0], ch[2], 1, 1))
         self.add_module("layer3", _ResLayer(n_blocks[1], ch[2], ch[3], 2, 1))
@@ -57,10 +62,33 @@ class DeepLabV2(nn.Sequential):
                 m.eval()
 
 
+class DeepLabV2_DRN105(nn.Module):
+    '''
+    DeepLabV2 - Dilated ResNet-101 
+    Weight: pretrained on imageNet
+    '''
+    def __init__(self, n_classes, atrous_rates):
+        super(DeepLabV2_DRN105, self).__init__()
+        ch = [64 * 2**p for p in range(6)]
+        self.resnet = drn_d_105(pretrained=True)
+        self.inch = ch[5]
+        self.aspp = _ASPP(self.inch, n_classes, atrous_rates)
+
+    def freeze_bn(self):
+        for m in self.modules():
+            if isinstance(m, _ConvBnReLU.BATCH_NORM):
+                m.eval()
+
+    def forward(self, x):
+        x = self.resnet(x)
+        out = self.aspp(x)
+        return out
+
+
 if __name__ == "__main__":
-    model = DeepLabV2(
-        n_classes=21, n_blocks=[3, 4, 23, 3], atrous_rates=[6, 12, 18, 24]
-    )
+    model = DeepLabV2(n_classes=21,
+                      n_blocks=[3, 4, 23, 3],
+                      atrous_rates=[6, 12, 18, 24])
     model.eval()
     image = torch.randn(1, 3, 513, 513)
 
