@@ -26,6 +26,7 @@
 - opencv
 - pydensecrf.densecrf 
 - PIL
+- fire
 # [PSA](https://github.com/jiwoon-ahn/psa)
 - [the weight of classifier](https://drive.google.com/file/d/1xESB7017zlZHqxEWuh1Rb89UhjTGIKOA/view?usp=sharing)
 - [the weight of affinityNet](https://drive.google.com/open?id=1mFvTH3siw0SS0vqPH0o9N3cI_ISQacwt)
