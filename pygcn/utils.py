@@ -184,8 +184,7 @@ def evaluate_dataset_IoU(predicted_folder=args.path4save_img,
     - evaluate_dataset_IoU(predicted_folder=predict_folder)
     - show_timing(time_start=t_start, time_end=time.time())
     """
-    if not os.path.exists(predicted_folder):
-        os.makedirs(predicted_folder)
+
     img_list = load_img_name_list(file_list)  # e.g. 2007_000032
     IoU = IOUMetric(args.num_class)
     num_imgs = len(img_list)
@@ -216,9 +215,6 @@ def evaluate_dataset_IoU(predicted_folder=args.path4save_img,
     acc, acc_cls, iu, mean_iu_tensor, fwavacc = IoU.evaluate()
 
     # show information
-    print("IoU:{:>27.2f} %  Acc:{:>13.2f} %".format(mean_iu_tensor * 100,
-                                                    acc * 100))
-    print("=" * 34)
     print("pseudo pixel label ratio: {:>5.2f} %".format(
         IoU.num_train_pixel4dataset / IoU.num_pixel4dataset * 100))
     # show IoU of each class
@@ -226,14 +222,23 @@ def evaluate_dataset_IoU(predicted_folder=args.path4save_img,
     for idx, iu_class in enumerate(iu):
         print("{:12}: {:>17.2f} %".format(SEG_ID_TO_NAME[idx], iu_class * 100))
     print("=" * 34)
-
+    print("IoU:{:>27.2f} %  Acc:{:>13.2f} %".format(mean_iu_tensor * 100,
+                                                    acc * 100))
+    print("=" * 34)
     # === save information in `information_for_IoU.md`
-    if save_info:
+    if descript is not None:
         time_now = datetime.datetime.today()
         time_now = "{}-{}-{}  {}:{}".format(time_now.year, time_now.month,
                                             time_now.day, time_now.hour,
                                             time_now.minute)
-        with open("information_for_IoU.md", "a") as f:
+
+        if not os.path.isfile("meanIoU@Jun.md"):
+            f = open("meanIoU@Jun.md", "w")
+            f.close()
+
+        with open("meanIoU@Jun.md", "r") as f:
+            old_context = f.read()
+        with open("meanIoU@Jun.md", "r+") as f:
             f.write("{}  \n".format(time_now))
             f.write("---\n")
             f.write("\n|Setting|Value|\n")
@@ -262,53 +267,9 @@ def evaluate_dataset_IoU(predicted_folder=args.path4save_img,
                 acc * 100,
                 mean_iu_tensor.item() * 100))
             f.write("-" * 3 + "\n")
+            f.write(old_context)
+
     return mean_iu_tensor.item(), acc
-
-
-def saveInfo(predicted_folder,
-             method='GCN+LP',
-             sava_info=True,
-             save_file_name=args.path4saveInfo,
-             descript=""):
-    """
-    save IoU and Acc for GCN+LP
-    ===
-    - predicted_folder = os.path.join(args.path4save_img, 'label_propagation')
-    """
-    args.parse()
-    t_start = time.time()
-    time_now = datetime.datetime.today()
-    time_now = "{}-{}-{}  {}:{}".format(time_now.year, time_now.month,
-                                        time_now.day, time_now.hour,
-                                        time_now.minute)
-    iou, acc = evaluate_dataset_IoU(predicted_folder=predicted_folder,
-                                    descript=descript)
-    # iou_LP, acc_LP = evaluate_dataset_IoU(
-    #     predicted_folder=os.path.join(args.path4save_img, 'label_propagation'))
-
-    # keyword len + '=' is 25 numeric is 5, please follow this form for descript
-    descript = '## method: {}\n\
-        |2-layers-GCN-hidden= {:>10}\n\
-        |max_epoch= {:>20}\n\
-        |drop_rate= {:>20}\n\
-        |use_Biliteral_propagator= {:>5}\n\
-        |use_Biliteral_graph= {:>10}\n\
-        |RGBXY_feature= {:>16}\n\
-        |alpha4LP= {:>21}\n\n'.format(method, args.num_hid_unit,
-                                      args.max_epoch, args.drop_rate,
-                                      args.use_gaussian_propagator,
-                                      args.use_Biliteral_graph, args.use_RGBXY,
-                                      args.alpha4labelPropagation)
-    descript += '>IoU:___{:>10.5f} - - - - Acc:___{:>10.5f}  \n'.format(
-        iou, acc)
-
-    print("spend time:{:.1f}s".format(time.time() - t_start))
-    if sava_info:
-        with open(save_file_name, 'a') as f:
-            f.write("{}\n".format(time_now))
-            f.write(descript)
-            f.write("---\n")
-        print("infomation was save in {}".format(args.path4saveInfo))
 
 
 """2020.5.17"""
@@ -502,7 +463,8 @@ def compute_seg_label(ori_img,
                       cam_label,
                       norm_cam,
                       threshold4conf=0.8,
-                      use_crf=True):
+                      use_crf=True,
+                      confident_region=1.):
     """
     :norm_cam: value between 0,1]
     ---
@@ -519,7 +481,7 @@ def compute_seg_label(ori_img,
             cam_dict[i] = norm_cam[i]
             cam_np[i] = norm_cam[i]
 
-    bg_score = np.power(1 - np.max(cam_np, 0), 32)
+    bg_score = np.power(1 - np.max(cam_np, 0), 32)  # confident BG
     bg_score = np.expand_dims(bg_score, axis=0)
     cam_all = np.concatenate((bg_score, cam_np))
     _, bg_w, bg_h = bg_score.shape
@@ -553,8 +515,9 @@ def compute_seg_label(ori_img,
             # === W_thre means that the CAM score in this idx is higher than a threshold (in this case = 0.1)
             cam_class_order = np.sort(cam_class_order)
             # set the 60% idx
-            confidence_pos = int(cam_class_order.shape[0] * 0.6)
-            # take the top 60% value as the threshold
+            confidence_pos = int(cam_class_order.shape[0] *
+                                 (1. - confident_region))
+            # take the top 40% value as the threshold
             confidence_value = cam_class_order[confidence_pos]
 
             # keep the value which higher than the threshold
@@ -569,7 +532,7 @@ def compute_seg_label(ori_img,
             # make FG region score = 0
             cam_class[class_not_region] = 0
             # only confident background region would be take
-            class_sure_region = (cam_class > 0.8)
+            class_sure_region = (cam_class > threshold4conf)
             # expand the sure region
             cam_sure_region = np.logical_or(cam_sure_region, class_sure_region)
 
@@ -699,7 +662,7 @@ def show_timing(time_start, time_end, show=False):
     - you code/function you want to timing  
     - show_timing(t_start,time.time())
     """
-    time_hms = "Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
+    time_hms = "Total time elapsed: {:.0f} h {:.0f} m {:.0f} s".format(
         (time_end - time_start) // 3600, (time_end - time_start) / 60 % 60,
         (time_end - time_start) % 60)
     if show:
@@ -815,8 +778,7 @@ def crf_inference_inf(img_name,
         for key in prect_dict.keys():
             print("key: ID: {}, name: {} ".format(key, SEG_ID_TO_NAME[key]))
             predict_np[key] = prect_dict[key]
-
-    probs = pred_softmax(torch.tensor(predict_np)).numpy()
+    probs = pred_softmax(torch.Tensor(predict_np)).numpy()
     # === apply CRF
     n_labels = labels
     print("H,W:", img.shape[:2])
@@ -856,7 +818,7 @@ def crf_inference_inf(img_name,
         os.path.join(path4CRFLabel, img_name + '.png')))
 
 
-def crf_inference_psa(img, probs, t=10, scale_factor=1, labels=21):
+def crf_inference_psa(img, probs, CRF_parameter, scale_factor=1, labels=21):
     """
     this setting is different from PSA
 
@@ -871,21 +833,35 @@ def crf_inference_psa(img, probs, t=10, scale_factor=1, labels=21):
     d = dcrf.DenseCRF2D(w, h, n_labels)
     pred_softmax = torch.nn.Softmax(dim=0)
     probs = pred_softmax(torch.tensor(probs)).numpy()
+    # probs = pred_softmax(torch.from_numpy(probs).float()).numpy()
     unary = unary_from_softmax(probs)
     unary = np.ascontiguousarray(unary)
 
     d.setUnaryEnergy(unary)
+    # =======================================================
     # === setting in PSA for la_CRF,ha_CRF
     # d.addPairwiseGaussian(sxy=3 / scale_factor, compat=3)
     # d.addPairwiseBilateral(sxy=80 / scale_factor,
     #                        srgb=13,
     #                        rgbim=np.copy(img),
     #                        compat=10)
-    d.addPairwiseGaussian(sxy=4 / scale_factor, compat=3)
-    d.addPairwiseBilateral(sxy=83 / scale_factor,
-                           srgb=5,
+    # =======================================================
+    # setting in deeplab
+    # CRF_parameter = args.CRF
+    # CRF_parameter = args.CRF_psa
+    d.addPairwiseGaussian(sxy=CRF_parameter["pos_xy_std"] / scale_factor,
+                          compat=CRF_parameter["pos_w"])
+    d.addPairwiseBilateral(sxy=CRF_parameter["bi_xy_std"] / scale_factor,
+                           srgb=CRF_parameter["bi_rgb_std"],
                            rgbim=np.copy(img),
-                           compat=3)
+                           compat=CRF_parameter["bi_w"])
+    t = CRF_parameter["iter_max"]
+    # =======================================================
+    # d.addPairwiseGaussian(sxy=4 / scale_factor, compat=3)
+    # d.addPairwiseBilateral(sxy=83 / scale_factor,
+    #                        srgb=5,
+    #                        rgbim=np.copy(img),
+    #                        compat=3)
     Q = d.inference(t)
 
     return np.array(Q).reshape((n_labels, h, w))
@@ -956,6 +932,7 @@ def crf_psa(img_name,
 
 
 def crf_deepLab(img_name,
+                CRF_parameter,
                 img=None,
                 path4CRFLabel=None,
                 probs=None,
@@ -984,13 +961,12 @@ def crf_deepLab(img_name,
                          align_corners=True)  # [1,21,H_dn,W_dn]
     logits_t = interp(torch.tensor(output)).squeeze(dim=0)  # [21,505,505]
     logits = logits_t[:, :size[0], :size[1]]  # === [21,H,W]
+    pred_seg_class = logits.argmax(dim=0).view(-1).long()  # === [H,W]
+    appear_class = torch.unique(pred_seg_class)
     prect_dict = dict()
-    img_label = load_image_label_from_xml(img_name=img_name,
-                                          voc12_root=args.path4VOC_root)
-    prect_dict[0] = logits[0]
     # key range from 0~20 if you use VOC dataset
-    for key in img_label:  # img_label +1 = segmentation_label
-        prect_dict[int(key + 1)] = logits[int(key + 1)].numpy()
+    for key in appear_class:  # img_label +1 = segmentation_label
+        prect_dict[key] = logits[key].numpy()
     """ ===3. save random walk prediction as np array in RW_prediction  === """
 
     # >>>> save in dictionary() >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -1004,7 +980,10 @@ def crf_deepLab(img_name,
         img_path = os.path.join(args.path4Image, name + '.jpg')
         orig_img = np.asarray(Image.open(img_path))
         # === note that orig_img have the shape [H,W,3]
-        crf_score = crf_inference_psa(orig_img, v, labels=v.shape[0])
+        crf_score = crf_inference_psa(orig_img,
+                                      v,
+                                      labels=v.shape[0],
+                                      CRF_parameter=CRF_parameter)
         h, w = orig_img.shape[:2]
         crf_dict = dict()
         crf_score_np = np.zeros(shape=(args.num_class, h, w))
@@ -1013,28 +992,25 @@ def crf_deepLab(img_name,
             crf_dict[key] = crf_score[i]
         return crf_score_np, crf_dict
 
-    if False:
-        # === note that orig_img must be in shape [H,W,3]
-        rw_crf_result, crf_dict = rw_crf(predicted_dict=prect_dict,
-                                         name=img_name)
-        # === save as dictionary
-        if not os.path.exists(save_path + "_np"):
-            os.mkdir(save_path + "_np")
-        np.save(os.path.join(save_path + "_np", img_name + '.npy'), crf_dict)
-        """ ===4. save the random walk prediction as label in args.out_rw as .png === """
-        if not os.path.exists(save_path):
-            os.makedirs(save_path)
-        scipy.misc.toimage(rw_crf_result.argmax(axis=0),
-                           cmin=0,
-                           cmax=255,
-                           pal=colors_map,
-                           mode="P").save(
-                               os.path.join(save_path, img_name + '.png'))
-        # >>>>>>>>>>>>>>>>>>>>>>>>>
+    # >>>>>>>>>>>>>>>>>>>>>>>>>
+    # === note that orig_img must be in shape [H,W,3]
+    rw_crf_result, crf_dict = rw_crf(predicted_dict=prect_dict, name=img_name)
+    # === save as dictionary
+    if not os.path.exists(save_path + "_np"):
+        os.mkdir(save_path + "_np")
+    np.save(os.path.join(save_path + "_np", img_name + '.npy'), crf_dict)
+    """ ===4. save the random walk prediction as label in args.out_rw as .png === """
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+    scipy.misc.toimage(rw_crf_result.argmax(axis=0),
+                       cmin=0,
+                       cmax=255,
+                       pal=colors_map,
+                       mode="P").save(
+                           os.path.join(save_path, img_name + '.png'))
+    # >>>>>>>>>>>>>>>>>>>>>>>>>
 
-    path_pred = os.path.join("..", "..", "..", "media", getpass.getuser(),
-                             "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24", "pygcn",
-                             "pred_semi_VCIP")
+    path_pred = os.path.join("pred_semi_VCIP")
     if not os.path.exists(path_pred):
         os.makedirs(path_pred)
     scipy.misc.toimage(logits.argmax(dim=0).numpy(),
@@ -1061,8 +1037,9 @@ class HLoss(nn.Module):
         super(HLoss, self).__init__()
 
     def forward(self, x, gt, ignore_index=255):
-        b = F.softmax(x, dim=1) * F.log_softmax(x, dim=1)
-        b = -1.0 * b[gt == 255].mean()  # sum all elements
+        # b = F.softmax(x, dim=1) * F.log_softmax(x, dim=1)
+        b = -torch.exp(x) * x
+        b = b[gt == 255].mean()  # sum all elements
         return b
 
 
@@ -1095,51 +1072,159 @@ class symmetricLoss(nn.Module):
         return b
 
 
-if __name__ == "__main__":
+def PPL_refine(img, Pselabel):
+    """
+    Refine Partial Pseudo Label with displacement
+    ---
+    - img,numpy array [H,W,3]
+    """
+    pass
 
-    # fire.Fire()
-    # saveInfo(method='GCN+LP')
+
+def apply_dCRF(mode,
+               src=None,
+               save_path=None,
+               save_path_logit=None,
+               dataset=None,
+               user="Ours",
+               skip_exist_file=False):
+    """
+    Apply dense CRF in deeplab prediction or random walk prediction, then evaluate the dCRF result
+    ---
+    mode: rw | deeplab
+    src: the path you want to perform dense CRF
+    """
     t_start = time.time()
     """Code Zone"""
-    predicted_folder = os.path.join("..", "psa", "RES_CAM_LABEL_TRAIN")
+    # ===predction + CRF and save the result in args.path4saveCRF and evaluate meanIoU
     # >>specify your >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    rw_path = os.path.join("..", "psa", "RW_prediction_np_res38")
-    descript = " FBLoss: T | GRAPH: RES (normalize) | UP_CRF_DN | node feature: RES"
-    applyCRF = False
-    args.path4prediction_np = os.path.join(
-        "..", "..", "..", "media", getpass.getuser(),
-        "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24", "pygcn",
-        "predict_result_matrix_visual_new")
-    pred_root = os.path.join(args.path4prediction_np, "250")
-    f_list = args.path4train_images
+    # descript = "Deeplabv2@ImageNet Pretrain Weight @ w/o CRF mIOU=58.26 @ evaluate on val set@CRF parameter: CRF_psa@"
+    descript = "Our Complete pseudo label"
+    if save_path is None:
+        save_path = "submitVOC/{}/results/VOC2012/Segmentation/comp6_{}_cls".format(
+            user, dataset)
+
+    if not os.path.exists(save_path):
+        os.makedirs(save_path)
+
+    if dataset is None:
+        f_list = args.path4val_images
+    else:
+        f_list = os.path.join("..", "psa", "voc12", "{}.txt".format(dataset))
+
     args.path4saveCRF = os.path.join(*(args.path4save_img.split('/')[:-1] +
                                        [args.path4saveCRF]))
     print("args.path4saveCRF: ", args.path4saveCRF)
+    print("f_list: ", f_list)
+    # mode = 'deeplab'  # rw | deeplab
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-    if not os.path.exists(args.path4saveCRF):
-        os.makedirs(args.path4saveCRF)
-    if applyCRF:
-        img_list = load_img_name_list(f_list)
-        for idx, img in enumerate(img_list):
-            print("[{}/{}]========time: {}".format(idx, np.size(img_list)),
-                  show_timing(time_start=t_start, time_end=time.time()))
-            # crf_inference_inf(img_name=img, prediction_root=pred_root)
+    path4saveCRF_rw = os.path.join("RW_CRF")
+    path4saveCRF_deeplab = save_path
+    print("savePath:", save_path)
+    if mode == 'deeplab':
+        evaluate_folder = path4saveCRF_deeplab
+        if src is None:
+            pred_root = os.path.join(
+                args.path4Deeplab_logit,
+                get_least_modify_file(args.path4Deeplab_logit))
+        else:
+            pred_root = os.path.join(args.path4Deeplab_logit, src)
+        print("pred_root: ", pred_root)
+    elif mode == 'rw':
+        f_list = args.path4train_aug_images
+        pred_root = os.path.join("/home", getpass.getuser(), "psa",
+                                 "RES_RW_np")
+        evaluate_folder = path4saveCRF_rw
+    img_list = load_img_name_list(f_list)
+    ignore_list = [os.path.splitext(f)[0] for f in os.listdir(save_path)]
+    for idx, img in enumerate(img_list):
+        if skip_exist_file:
+            if img in ignore_list:
+                print("[{}] ignore: {}".format(idx, img), end='\r')
+                continue
+        print("[{}/{}]========time: {} ".format(
+            idx, np.size(img_list),
+            show_timing(time_start=t_start, time_end=time.time())),
+              end='\r')
+        if mode == 'rw':
             crf_psa(img_name=img,
                     prediction_root=pred_root,
-                    save_path=args.path4saveCRF)  # use by psa, infer_cls.py
-            # crf_deepLab(img_name=img,
-            #             prediction_root=pred_root,
-            #             save_path=args.path4saveCRF)
-
+                    save_path=path4saveCRF_rw)  # use by psa, infer_cls.py
+        elif mode == 'deeplab':
+            crf_deepLab(img_name=img,
+                        prediction_root=pred_root,
+                        save_path=path4saveCRF_deeplab,
+                        save_path_logit=save_path_logit,
+                        CRF_parameter=args.CRF_deeplab)
+    if dataset != "test":
         evaluate_dataset_IoU(file_list=f_list,
-                             predicted_folder=args.path4saveCRF,
-                             descript=descript,
+                             predicted_folder=evaluate_folder,
+                             descript=descript + os.path.basename(pred_root),
                              path4GT=args.path4VOC_class_aug)
-    else:
-        evaluate_dataset_IoU(
-            predicted_folder=pred_root,
-            file_list=args.path4train_images,
-            path4GT=args.path4VOC_class_aug,
-            descript="train set,CAM is the same as in data_v8")
-    """Code Zone"""
-    show_timing(time_start=t_start, time_end=time.time())
+
+
+def mixPPLAndCPL(save_path=None, PPL_path=None, CPL_path=None):
+    """
+    Replace the prediction in train index of complete label with partial label (assume that GCN can not denoise)
+    ---
+    - PPL_path: default will take the least result
+    - CPL_path: default will take the least result
+    """
+    from os.path import join as opj
+    t_start = time.time()
+    CPL_path = os.path.join(
+        args.path4Complete_label_label,
+        get_least_modify_file(args.path4Complete_label_label))
+    PPL_path = os.path.join(
+        args.path4partial_label_label,
+        "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_0.3_UP"
+    )
+    f_list = load_img_name_list(args.path4train_aug_images)
+    length = len(f_list)
+    additional_space = os.path.join("..", "..", "..", "media",
+                                    getpass.getuser(), "pygcn", "data")
+    if save_path is None:
+        save_path = opj(additional_space,
+                        "MixPartialPseudoLabelAndComPletePseudoLabel")
+        if not os.path.exists(save_path):
+            os.makedirs(save_path)
+    for idx, label_name in enumerate(f_list, start=1):
+        print("[{}/{}] Time:{}".format(
+            idx, length, show_timing(time_start=t_start,
+                                     time_end=time.time())),
+              end='\r')
+        cpl = opj(CPL_path, label_name + '.png')
+        ppl = opj(PPL_path, label_name + '.png')
+        cpl_arr = np.array(Image.open(cpl))
+        ppl_arr = np.array(Image.open(ppl))
+        final = np.where(ppl_arr == 255, cpl_arr, ppl_arr)
+        # print("cpl_arr.shape ", cpl_arr.shape)
+        # print("ppl_arr.shape ", ppl_arr.shape)
+        # print("final.shape ", final.shape)
+        scipy.misc.toimage(final, cmin=0, cmax=255, pal=colors_map,
+                           mode="P").save(
+                               os.path.join(save_path, label_name + '.png'))
+    # === evaluation ===
+    evaluate_dataset_IoU(
+        file_list=args.path4train_aug_images,
+        predicted_folder=save_path,
+        path4GT=args.path4VOC_class_aug,
+        descript="OurCPLmIoU=59.77@OurPPLmIoU=77.05@train_aug@afterCRF")
+
+
+""" 2020.6.25 """
+
+
+def get_least_modify_file(folder, show_sorted_data=False):
+    dir_list = os.listdir(folder)
+    dir_list = sorted(dir_list,
+                      key=lambda x: os.path.getmtime(os.path.join(folder, x)))
+    if show_sorted_data:
+        for it in dir_list:
+            print("dir_list: {:<80}  time: {:}".format(
+                it, os.path.getmtime(os.path.join(args.path4GCN_logit, it))))
+    return dir_list[-1]
+
+
+if __name__ == "__main__":
+    fire.Fire()

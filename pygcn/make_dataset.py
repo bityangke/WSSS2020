@@ -511,37 +511,529 @@ def gen_partial_label(img_name,
     x = (label != 255)  # train_idx
 
 
+def gen_partial_label_with_ratio(img_name,
+                                 predict_root=None,
+                                 cam_mode="cam",
+                                 destination4visulization="RES38_PSEUDO_LABEL",
+                                 destination4logit=None,
+                                 confident_region=1.,
+                                 show_infromation=False):
+    """
+    Generate partial pseudo label with ratio, ignore (1-ratio)
+    ---
+    the data folder will be generated:
+    - destination4visulization + '_DN_UP'
+    - destination4visulization + '_DN'
+    - destination4visulization + '_UP'
+    - destination4visulization + "_DN_SCORE"
+    - destination4visulization + "_UP_SCORE"
+    """
+    if not os.path.exists(destination4visulization + '_DN_UP'):
+        os.mkdir(destination4visulization + '_DN_UP')
+
+    img = imread(os.path.join(args.path4Image, img_name + ".jpg"))
+    H_origin, W_origin, C = img.shape
+    # print("img.shape", img.shape)
+    H = int(np.ceil(H_origin / 4))
+    W = int(np.ceil(W_origin / 4))
+    """=== generate pseudo label and idx for train,test ==="""
+    cams = np.zeros((args.num_class - 1, H_origin, W_origin))  # [20,H,W]
+    dict_np = np.load(os.path.join(predict_root, img_name + '.npy'),
+                      allow_pickle=True).item()
+    cam_label = np.zeros(20)
+    # =================================
+    # save CAM in dictionary
+    # i think this part can be delete,
+    # just set cams = np.load(.......)
+    # =================================
+    for key, cam in dict_np.items():
+        if cam_mode == "rw":
+            if key == 0:
+                continue
+            key = key - 1
+        cam_label[key] = 1
+        cams[key] = cam
+    """ === CRF interset CAMla+CAMha. sava label_score in .npy === """
+    cam_label = cam_label.astype(np.uint8)
+    # [C,H_up,W_up]
+    seg_label, seg_score = compute_seg_label(ori_img=img,
+                                             cam_label=cam_label,
+                                             norm_cam=cams,
+                                             use_crf=True,
+                                             confident_region=confident_region)
+    """ === downsampling label_score for sava in .npy === """
+    # === downsampling score may used by random walk
+    img_dn = Image.fromarray(img).resize(
+        (W, H), Image.LANCZOS)  # [W,H 3] note!! resize的輸入是(W,H)
+    img_dn = np.asarray(img_dn)  # [H,W,3]
+    seg_score_dn = F.interpolate(torch.tensor(seg_score[np.newaxis, :, :, :]),
+                                 size=(H, W),
+                                 mode="bilinear",
+                                 align_corners=False).squeeze().numpy()
+    # [C,H,W]
+    # seg_label_dn_ = F.interpolate(torch.tensor(seg_score[np.newaxis, :, :],
+    #                                            dtype=torch.float64),
+    #                               size=(H, W),
+    #                               mode="bilinear",
+    #                               align_corners=False).squeeze().numpy()
+    # seg_label_dn = np.argmax(seg_label_dn_, axis=0)
+    # include ignore label 255
+    seg_label = seg_label.astype(np.uint8)
+    # === using PIL to downsample
+    seg_label_PIL_dn = Image.fromarray(seg_label).resize(
+        (W, H), Image.NEAREST)  # [W,H 3] note!! resize的輸入是(W,H)
+    seg_label_dn = np.asarray(seg_label_PIL_dn)  # [H,W]
+    # === using torch.bilinear to downsample
+    seg_label_torch_dn = seg_score_dn.argmax(axis=0)  # [H,W]
+    # === vote
+    seg_label_dn = np.where(seg_label_torch_dn == seg_label_PIL_dn,
+                            seg_label_torch_dn, 255)
+    if show_infromation:  # show infromation
+        print("seg_label.shape ", seg_label.shape)
+        print("np.unique(seg_label) ", np.unique(seg_label))
+        print("np.unique(seg_label_dn) ", np.unique(seg_label_dn))
+    # [H,W]
+
+    # seg_score_dn = Image.fromarray(seg_score_chw).resize(
+    #     (W, H), Image.LANCZOS)  # [H,W,3]
+    # seg_label_dn = np.argmax(seg_score_dn, axis=2)
+    # =======================================================================
+    # FYI,By deepLabv2 , it say that
+    # Image.resize can do better downsample than cv2 and torch interpolation
+    # =======================================================================
+    # ==== use torch to down sample
+    # seg_label_dn = F.interpolate(torch.tensor(
+    #     seg_label[np.newaxis, np.newaxis, :, :], dtype=torch.float64),
+    #                              size=(H, W),
+    #                              mode="nearest").squeeze().numpy()
+    # === just for visualization
+    seg_label_dn_up = F.interpolate(torch.tensor(
+        seg_label_dn[np.newaxis, np.newaxis, :, :], dtype=torch.float64),
+                                    size=(H_origin, W_origin),
+                                    mode="nearest").squeeze().numpy()
+
+    # seg_label_dn = np.argmax(seg_score_dn, axis=0)
+    """ === save seg_label_dn_up in destination4visulization + '_DN_UP' === """
+    scipy.misc.toimage(seg_label_dn_up,
+                       cmin=0,
+                       cmax=255,
+                       pal=colors_map,
+                       mode='P').save(
+                           os.path.join(destination4visulization + '_DN_UP',
+                                        "{}.png".format(img_name)))
+
+    def save_pseudo_label(seg_score,
+                          seg_label,
+                          destination,
+                          img_name="2007_000032",
+                          save_npy=True):
+        """
+        Save Label and Label Score to `.png` and dictionary
+        ===
+        - label would be upsample to save
+        - `img_name`: str, only file name, not include extension or path
+        - `seg_score`: numpy array, shape: [num_class,H,W] 
+        - `seg_label`: numpy array, shape: [H,W] 
+        """
+        if not os.path.exists(destination):
+            os.mkdir(destination)
+
+        pseudo_label_dict = dict()
+        img_label = load_image_label_from_xml(img_name=img_name,
+                                              voc12_root=args.path4VOC_root)
+        pseudo_label_dict[0] = seg_score[0]
+        # key range from 0~20 if you use VOC dataset
+        for key in img_label:  # img_label +1 = segmentation_label
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            # pseudo_label_dict[int(key)] or pseudo_label_dict[int(key+1)] ???
+            pseudo_label_dict[int(key + 1)] = seg_score[int(key + 1)]
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        # save score
+        if save_npy:
+            destination_np = destination4logit
+            if not os.path.exists(destination_np):
+                os.mkdir(destination_np)
+            np.save(os.path.join(destination_np, img_name), pseudo_label_dict)
+        # Save label mask
+        scipy.misc.toimage(seg_label,
+                           cmin=0,
+                           cmax=255,
+                           pal=colors_map,
+                           mode='P').save(
+                               os.path.join(destination,
+                                            "{}.png".format(img_name)))
+
+    """ === downsampling label for save in .png === """
+    save_pseudo_label(seg_score=seg_score_dn,
+                      seg_label=seg_label_dn,
+                      img_name=img_name,
+                      destination=destination4visulization + '_DN',
+                      save_npy=False)
+    """ === upsampling label for save in .png === """
+    save_pseudo_label(seg_score=seg_score,
+                      seg_label=seg_label,
+                      img_name=img_name,
+                      destination=destination4visulization + '_UP',
+                      save_npy=False)
+
+
+def gen_EX_PPL_ratio(img_name,
+                     predict_root=None,
+                     cam_mode="cam",
+                     destination4visulization="RES38_PSEUDO_LABEL",
+                     destination4logit=None,
+                     confident_region=1.,
+                     show_infromation=False):
+    """
+    Generate extend version of the partial pseudo label with ratio, ignore (1-ratio)
+    ---
+    the data folder will be generated:
+    - destination4visulization + '_DN_UP'
+    - destination4visulization + '_DN'
+    - destination4visulization + '_UP'
+    - destination4visulization + "_DN_SCORE"
+    - destination4visulization + "_UP_SCORE"
+    """
+    if not os.path.exists(destination4visulization + '_DN_UP'):
+        os.mkdir(destination4visulization + '_DN_UP')
+
+    img = imread(os.path.join(args.path4Image, img_name + ".jpg"))
+    H_origin, W_origin, C = img.shape
+    # print("img.shape", img.shape)
+    H = int(np.ceil(H_origin / 8))
+    W = int(np.ceil(W_origin / 8))
+    """=== generate pseudo label and idx for train,test ==="""
+    cams = np.zeros((args.num_class - 1, H_origin, W_origin))  # [20,H,W]
+    dict_np = np.load(os.path.join(predict_root, img_name + '.npy'),
+                      allow_pickle=True).item()
+    cam_label = np.zeros(20)
+    # =================================
+    # save CAM in dictionary
+    # i think this part can be delete,
+    # just set cams = np.load(.......)
+    # =================================
+    for key, cam in dict_np.items():
+        if cam_mode == "rw":
+            if key == 0:
+                continue
+            key = key - 1
+        cam_label[key] = 1
+        cams[key] = cam
+    """ === CRF interset CAMla+CAMha. sava label_score in .npy === """
+    cam_label = cam_label.astype(np.uint8)
+    # [C,H_up,W_up]
+    seg_label, seg_score = compute_seg_label(ori_img=img,
+                                             cam_label=cam_label,
+                                             norm_cam=cams,
+                                             use_crf=True,
+                                             confident_region=confident_region)
+    """ === downsampling label_score for sava in .npy === """
+    # === downsampling score may used by random walk
+    img_dn = Image.fromarray(img).resize(
+        (W, H), Image.LANCZOS)  # [W,H 3] note!! resize的輸入是(W,H)
+    img_dn = np.asarray(img_dn)  # [H,W,3]
+    seg_score_dn = F.interpolate(torch.tensor(seg_score[np.newaxis, :, :, :]),
+                                 size=(H, W),
+                                 mode="bilinear",
+                                 align_corners=False).squeeze().numpy()
+    # [C,H,W]
+    # seg_label_dn_ = F.interpolate(torch.tensor(seg_score[np.newaxis, :, :],
+    #                                            dtype=torch.float64),
+    #                               size=(H, W),
+    #                               mode="bilinear",
+    #                               align_corners=False).squeeze().numpy()
+    # seg_label_dn = np.argmax(seg_label_dn_, axis=0)
+    # include ignore label 255
+    seg_label = seg_label.astype(np.uint8)
+    # === using PIL to downsample
+    seg_label_PIL_dn = Image.fromarray(seg_label).resize(
+        (W, H), Image.NEAREST)  # [W,H 3] note!! resize的輸入是(W,H)
+    seg_label_dn = np.asarray(seg_label_PIL_dn)  # [H,W]
+    # === using torch.bilinear to downsample
+    seg_label_torch_dn = seg_score_dn.argmax(axis=0)  # [H,W]
+    # === vote
+    seg_label_dn = np.where(seg_label_torch_dn == seg_label_PIL_dn,
+                            seg_label_torch_dn, 255)
+    if show_infromation:  # show infromation
+        print("seg_label.shape ", seg_label.shape)
+        print("np.unique(seg_label) ", np.unique(seg_label))
+        print("np.unique(seg_label_dn) ", np.unique(seg_label_dn))
+    # [H,W]
+
+    # seg_score_dn = Image.fromarray(seg_score_chw).resize(
+    #     (W, H), Image.LANCZOS)  # [H,W,3]
+    # seg_label_dn = np.argmax(seg_score_dn, axis=2)
+    # =======================================================================
+    # FYI,By deepLabv2 , it say that
+    # Image.resize can do better downsample than cv2 and torch interpolation
+    # =======================================================================
+    # ==== use torch to down sample
+    # seg_label_dn = F.interpolate(torch.tensor(
+    #     seg_label[np.newaxis, np.newaxis, :, :], dtype=torch.float64),
+    #                              size=(H, W),
+    #                              mode="nearest").squeeze().numpy()
+    # === just for visualization
+    seg_label_dn_up = F.interpolate(torch.tensor(
+        seg_label_dn[np.newaxis, np.newaxis, :, :], dtype=torch.float64),
+                                    size=(H_origin, W_origin),
+                                    mode="nearest").squeeze().numpy()
+
+    # seg_label_dn = np.argmax(seg_score_dn, axis=0)
+    """ === save seg_label_dn_up in destination4visulization + '_DN_UP' === """
+    scipy.misc.toimage(seg_label_dn_up,
+                       cmin=0,
+                       cmax=255,
+                       pal=colors_map,
+                       mode='P').save(
+                           os.path.join(destination4visulization + '_DN_UP',
+                                        "{}.png".format(img_name)))
+
+    def save_pseudo_label(seg_score,
+                          seg_label,
+                          destination,
+                          img_name="2007_000032",
+                          save_npy=True):
+        """
+        Save Label and Label Score to `.png` and dictionary
+        ===
+        - label would be upsample to save
+        - `img_name`: str, only file name, not include extension or path
+        - `seg_score`: numpy array, shape: [num_class,H,W] 
+        - `seg_label`: numpy array, shape: [H,W] 
+        """
+        if not os.path.exists(destination):
+            os.mkdir(destination)
+
+        pseudo_label_dict = dict()
+        img_label = load_image_label_from_xml(img_name=img_name,
+                                              voc12_root=args.path4VOC_root)
+        pseudo_label_dict[0] = seg_score[0]
+        # key range from 0~20 if you use VOC dataset
+        for key in img_label:  # img_label +1 = segmentation_label
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            # pseudo_label_dict[int(key)] or pseudo_label_dict[int(key+1)] ???
+            pseudo_label_dict[int(key + 1)] = seg_score[int(key + 1)]
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        # save score
+        if save_npy:
+            destination_np = destination4logit
+            if not os.path.exists(destination_np):
+                os.mkdir(destination_np)
+            np.save(os.path.join(destination_np, img_name), pseudo_label_dict)
+        # Save label mask
+        scipy.misc.toimage(seg_label,
+                           cmin=0,
+                           cmax=255,
+                           pal=colors_map,
+                           mode='P').save(
+                               os.path.join(destination,
+                                            "{}.png".format(img_name)))
+
+    """ === downsampling label for save in .png === """
+    save_pseudo_label(seg_score=seg_score_dn,
+                      seg_label=seg_label_dn,
+                      img_name=img_name,
+                      destination=destination4visulization + '_DN',
+                      save_npy=False)
+    """ === upsampling label for save in .png === """
+    save_pseudo_label(seg_score=seg_score,
+                      seg_label=seg_label,
+                      img_name=img_name,
+                      destination=destination4visulization + '_UP',
+                      save_npy=False)
+
+
+""" === 6.29 """
+
+
+def refine_PPL_given_IRN_cam(img_name,
+                             PPL_path=None,
+                             irn_Bmap_path=None,
+                             destination4visulization=None,
+                             destination4logit=None,
+                             show_infromation=False,
+                             erase_radious=3,
+                             BmapThred=.8):
+    """
+    Given the cam generate by IRNet, Generate partial pseudo label with ratio
+    ---
+    the data folder will be generated:
+    - destination4visulization
+    - destination4visulization + '_UP'
+    """
+    img = imread(os.path.join(args.path4Image, img_name + ".jpg"))
+    H_origin, W_origin, C = img.shape
+    # print("img.shape", img.shape)
+    H = int(np.ceil(H_origin / 8))
+    W = int(np.ceil(W_origin / 8))
+    """ ===  load upsample size Boundary map === """
+    bMap = np.load(
+        os.path.join(args.path4boundaryMap_logit + '_up',
+                     img_name + '.npy'))  # [H,W]
+    """=== generate pseudo label and idx for train,test ==="""
+    PPL = Image.open(os.path.join(PPL_path, img_name + ".png"))
+    PPL = np.array(PPL)  # [H_origin,W_origin]
+    # === use ratio to be the threshold
+    thred4Bun = sorted(bMap.flatten())
+    thred4Bun = thred4Bun[int(len(thred4Bun) *
+                              BmapThred)]  # 取低 --> 高的30%作為threshold
+    # === use a fixed number to be the threshold
+    # thred4Bun = .7
+    mask = np.where(PPL == 255, 1, 0)
+    new_PPL = np.copy(PPL)
+    """=== erase class which cross boundary ==="""
+    def boundary_clr(card_x, card_y, H, W, radius, PPL, new_PPL):
+        if bMap[card_x, card_y] > thred4Bun:
+            for idx_x in np.arange(card_x - radius, card_x + radius + 1):
+                for idx_y in np.arange(card_y - radius, card_y + radius + 1):
+                    if (0 < idx_x < H) and (0 < idx_y < W):
+                        new_PPL[idx_x, idx_y] = 255
+
+    def boundary_clr(card_x, card_y, H, W, radius, PPL, new_PPL):
+        if bMap[card_x, card_y] > thred4Bun:
+            for idx_x in np.arange(card_x - radius, card_x + radius + 1):
+                for idx_y in np.arange(card_y - radius, card_y + radius + 1):
+                    if (0 < idx_x < H) and (0 < idx_y < W):
+                        new_PPL[idx_x, idx_y] = 255
+
+    for i in range(H_origin):
+        for j in range(W_origin):
+            if PPL[i, j] == 255:
+                boundary_clr(card_x=i,
+                             card_y=j,
+                             H=H_origin,
+                             W=W_origin,
+                             radius=erase_radious,
+                             PPL=PPL,
+                             new_PPL=new_PPL)
+
+    # =================================
+    # save CAM in dictionary
+    # i think this part can be delete,
+    # just set cams = np.load(.......)
+    # =================================
+    if not os.path.exists(os.path.join(destination4visulization + '_UP')):
+        os.makedirs(os.path.join(destination4visulization + '_UP'))
+    """ === save seg_label_dn_up in destination4visulization + '_UP' === """
+    scipy.misc.toimage(new_PPL, cmin=0, cmax=255, pal=colors_map,
+                       mode='P').save(
+                           os.path.join(destination4visulization + '_UP',
+                                        "{}.png".format(img_name)))
+
+    def save_pseudo_label(seg_score,
+                          seg_label,
+                          destination,
+                          img_name="2007_000032",
+                          save_npy=True):
+        """
+        Save Label and Label Score to `.png` and dictionary
+        ===
+        - label would be upsample to save
+        - `img_name`: str, only file name, not include extension or path
+        - `seg_score`: numpy array, shape: [num_class,H,W] 
+        - `seg_label`: numpy array, shape: [H,W] 
+        """
+        if not os.path.exists(destination):
+            os.mkdir(destination)
+
+        pseudo_label_dict = dict()
+        img_label = load_image_label_from_xml(img_name=img_name,
+                                              voc12_root=args.path4VOC_root)
+        pseudo_label_dict[0] = seg_score[0]
+        # key range from 0~20 if you use VOC dataset
+        for key in img_label:  # img_label +1 = segmentation_label
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+            # pseudo_label_dict[int(key)] or pseudo_label_dict[int(key+1)] ???
+            pseudo_label_dict[int(key + 1)] = seg_score[int(key + 1)]
+            # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+        # save score
+        if save_npy:
+            destination_np = destination4logit
+            if not os.path.exists(destination_np):
+                os.mkdir(destination_np)
+            np.save(os.path.join(destination_np, img_name), pseudo_label_dict)
+        # Save label mask
+        scipy.misc.toimage(seg_label,
+                           cmin=0,
+                           cmax=255,
+                           pal=colors_map,
+                           mode='P').save(
+                               os.path.join(destination,
+                                            "{}.png".format(img_name)))
+
+    """ === downsampling label for save in .png === """
+    # === using PIL to downsample
+    PPL_PIL_dn = Image.fromarray(new_PPL.astype(np.uint8)).resize(
+        (W, H), Image.NEAREST)  # [W,H 3] note!! resize的輸入是(W,H)
+    new_PPL_dn = np.asarray(PPL_PIL_dn)  # [H,W]
+    if np.min(new_PPL_dn.flatten()) < 0:
+        input("there are 0 in PPL...")
+    if not os.path.exists(destination4visulization):
+        os.makedirs(destination4visulization)
+    scipy.misc.toimage(new_PPL_dn, cmin=0, cmax=255, pal=colors_map,
+                       mode='P').save(
+                           os.path.join(destination4visulization,
+                                        "{}.png".format(img_name)))
+
+
 if __name__ == "__main__":
+    from os.path import join as opj
     """
     - data_RES(UP_CRF_DN): apply CRF in upsample(original size) CAM 
     then save label & score in down sample
     - data_RES(2020): apply CRF in downsample CAM
     then save label & score in upsample
     """
-    # gen_dataset(predict_root=os.path.join("..", "psa", "RES_CAM__"),
-    #             destination="data_RES(UP_CRF_DN)",
-    #             destination4visulization="RES_PSEUDO_LABEL")
-    # args.path4train_images = os.path.join("..", "psa", "voc12", "val.txt")
-    # args.path4PsaFeature = os.path.join(
-    #     "..", "psa", "AFF_FEATURE_VGG")  # "AFF_FEATURE_VGG" | "AFF_FEATURE_2020" | "aff_map"
-    # gen_dataset(predict_root=os.path.join("..", "psa", "RES_CAM_TRAIN_AUG"),
-    #             destination="data_v8",
-    #             destination4visulization="RES_CAM_TRAIN_AUG_v8",
-    #             img_list_path=args.path4train_aug_images)
-
     # generate partial label >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     img_list = load_img_name_list(args.path4train_images)
     t_start = time.time()
+    topredion_rate = .3
+
+    cam_mode = "cam"
+    if cam_mode == "irn":
+        pred_folder = "{}@PIL_near@confident_ratio_{}_UP".format(
+            opj(args.path4partial_label_label,
+                "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL"), topredion_rate)
+        cam_folder = "PPL_mix_Bmap"
+    elif cam_mode == "rw":
+        pred_folder = "../psa/RES_RW_np"
+        cam_folder = "RES_RW_np"
+    else:
+        pred_folder = "../psa/RES_CAM_TRAIN_AUG"
+        cam_folder = "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL"
+
+    save_folder = "{}@PIL_near@confident_ratio_{}_{}".format(
+        cam_folder, topredion_rate, cam_mode)
+
     for idx, img_name in enumerate(img_list, start=1):
         print("[{}/{}] {} time: {}m {}s".format(
             idx, np.size(img_list), img_name, (time.time() - t_start) // 60,
-            int((time.time() - t_start) % 60)))
-        gen_partial_label(
-            img_name,
-            predict_root=
-            "../psa/RES_CAM_TRAIN_AUG",
-            destination=
-            "../psa/RES_CAM_TRAIN_AUG_partial_pseudo_label",
-            destination4visulization=
-            "../psa/RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL"
-        )
+            int((time.time() - t_start) % 60)),
+              end='\r')
+        gen_partial_label_with_ratio(img_name,
+                                     cam_mode=cam_mode,
+                                     predict_root=pred_folder,
+                                     destination4visulization=os.path.join(
+                                         args.path4partial_label_label,
+                                         save_folder),
+                                     destination4logit=os.path.join(
+                                         args.path4partial_label_logit,
+                                         save_folder),
+                                     confident_region=topredion_rate)
+        # refine_PPL_given_IRN_cam(img_name,
+        #                          irn_Bmap_path=args.path4boundaryMap + "_up",
+        #                          PPL_path=pred_folder,
+        #                          destination4visulization=os.path.join(
+        #                              args.path4partial_label_label,
+        #                              save_folder),
+        #                          destination4logit=os.path.join(
+        #                              args.path4partial_label_logit,
+        #                              save_folder),
+        #                          erase_radious=3,
+        #                          BmapThred=.7)
+    print("")
+    from utils import evaluate_dataset_IoU
+    evaluate_dataset_IoU(
+        predicted_folder=os.path.join(args.path4partial_label_label,
+                                      save_folder + "_UP"),
+        descript="exp: use Bmap erase PPL boundary@bunThred=top80 radious=3")

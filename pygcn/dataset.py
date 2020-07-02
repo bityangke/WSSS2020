@@ -46,6 +46,27 @@ class graph_voc(data.Dataset):
         """
         print('==================================================')
         print('{}: Loading nodes...'.format(img_name))
+        # === load features,train_idx,test_idx, ========================
+        """
+        x: train_idx. list 
+        y: test_idx. list
+        allx: features for train and test. [sparse matrix]
+        ally: labels, pseudo for train_idx, ground truth for test_idx. [np.array]
+        rgbxy: another feature for comparison. [np.array]
+        """
+        # names = ['train_idx', 'test_idx', 'feature', 'labels', 'rgbxy']
+        # objects = []
+        # for i in range(len(names)):
+        #     with open(
+        #             "{}.{}.{}".format(os.path.join(path4data, "ind"), img_name,
+        #                               names[i]), 'rb') as f:
+        #         if sys.version_info > (3, 0):
+        #             objects.append(pkl.load(f, encoding='latin1'))
+        #         else:
+        #             objects.append(pkl.load(f))
+
+        # train_idx, test_idx, features, labels, rgbxy = tuple(
+        #     objects)  # xxx_idx format is list
 
         # === get graph(affinity matrix) =======================
         # print("load Graph from:       {}".format(args.path4AffGraph))
@@ -62,65 +83,8 @@ class graph_voc(data.Dataset):
         adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(
             adj.T > adj)  # symmetrilize
         adj = normalize(adj + sp.eye(adj.shape[0]))
-
-        # === load features,train_idx,test_idx, =========================
-        """
-        x: train_idx. list 
-        y: test_idx. list
-        allx: features for train and test. [sparse matrix]
-        ally: labels, pseudo for train_idx, ground truth for test_idx. [np.array]
-        rgbxy: another feature for comparison. [np.array]
-        """
-        # if os.path.basename(args.path4data) == "data":
-        #     names = ['x', 'y', 'allx', 'ally', 'rgbxy']
-        # else:
-        #     names = ['train_idx', 'test_idx', 'feature', 'labels', 'rgbxy']
-        # objects = []
-        # for i in range(len(names)):
-        #     with open(
-        #             "{}.{}.{}".format(os.path.join(path4data, "ind"), img_name,
-        #                               names[i]), 'rb') as f:
-        #         if sys.version_info > (3, 0):
-        #             objects.append(pkl.load(f, encoding='latin1'))
-        #         else:
-        #             objects.append(pkl.load(f))
-
-        # train_idx, test_idx, features, labels, rgbxy = tuple(
-        #     objects)  # xxx_idx format is list
-        # ===============================================================
         """ === compute foreground & background === """
         # because (np.int8) will turn 255 -> -1,
-        # I make this error on own_preprocess.py
-        # input("path.basename: {}".format(os.path.basename(args.path4data)))
-        # if os.path.basename(args.path4data) == "data":
-        #     labels = np.argmax(labels,
-        #                        axis=1)  # the older data save label as ont-hot
-        #     # transfer [idx1,idx2,...] to [True,False,....] for train_idx
-        #     bool_arr = np.zeros_like(labels).astype(np.bool)
-        #     bool_arr[train_idx] = True
-        #     train_idx = bool_arr
-        #     # as above for test_idx
-        #     bool_arr = np.zeros_like(labels).astype(np.bool)
-        #     bool_arr[test_idx] = True
-        #     test_idx = bool_arr
-
-        # labels = np.where(labels == -1, 255, labels)
-        # # label for FG
-        # labels_fg = np.where(train_idx & labels != 0, labels, 255)
-        # # label for BG
-        # labels_bg = np.where(train_idx & labels == 0, labels, 255)
-        # """ ===      transfer to tensor         === """
-        # labels_t = torch.LongTensor(labels)
-        # labels_fg_t = torch.LongTensor(labels_fg)
-        # labels_bg_t = torch.LongTensor(labels_bg)
-        # idx_test_t = torch.tensor(test_idx)
-        # features_t = torch.FloatTensor(np.array(features.todense()))
-        # rgbxy_t = torch.FloatTensor(rgbxy)
-        # # features = sp.coo_matrix(allx).tolil()
-        # # adj = sparse_mx_to_torch_sparse_tensor(adj)
-        # adj_t = torch.FloatTensor(adj.toarray())
-        # return adj_t, features_t, labels_t, idx_test_t, rgbxy_t, img_name, labels_fg_t, labels_bg_t
-        # ===============================================================
         """ ===           generate bg label and fg label           ===
                               label 轉回non-one-hot
                                   put in tensor
@@ -132,8 +96,10 @@ class graph_voc(data.Dataset):
                 and it is one-hot you can't use np.argmax directly
         """
         # === make seg label shape as [H*W]
+        print("label path: {}".format(args.path4partial_label_label,
+                                      img_name + '.png'))
         labels = Image.open(
-            os.path.join(args.path4partial_label, img_name + '.png'))
+            os.path.join(args.path4partial_label_label, img_name + '.png'))
         labels = np.asarray(labels)
         labels = np.reshape(labels, (-1)).astype(np.int16)
 
@@ -156,31 +122,42 @@ class graph_voc(data.Dataset):
         # === shape: [1,448,H,W]
         img = imread(os.path.join(args.path4Image, img_name + ".jpg"))
         H_origin, W_origin, C = img.shape
-        H = int(np.ceil(H_origin / 8))
-        W = int(np.ceil(W_origin / 8))
+        aff_version = args.path4AffGraph.split("_")[-1]
+        # ============ for IRNet
+        if aff_version == "IRNet":
+            print("args.path4AffGraph.split(\"_\")[-1] ",
+                  args.path4AffGraph.split("_")[-1])
+            H = int(np.ceil(H_origin / 4))
+            W = int(np.ceil(W_origin / 4))
+        else:  # ============ for PSA
+            H = int(np.ceil(H_origin / 8))
+            W = int(np.ceil(W_origin / 8))
 
         # === reload aff features
         f_aff = np.load(os.path.join(args.path4node_feat, img_name + ".npy"))
-        aff_version = os.path.basename(args.path4node_feat).split("_")[-1]
-        f_aff = np.squeeze(f_aff)  # [448,H,W] for vgg| [448,H*W] for res38
+        # print("f_aff.shape:", f_aff.shape)
+        f_aff = np.squeeze(f_aff)  # [448,H,W] for vgg| [448,H,W] for res38
         # print("aff_version           ", aff_version)
-        if aff_version != "v3":  # vgg16
+        if aff_version != "IRNet":
             f_aff = np.reshape(f_aff, (np.shape(f_aff)[0], H * W))  # [448,H*W]
 
         allx = np.transpose(f_aff, [1, 0])  # [H*W,448]
+        # print("f_aff.shape:", allx.shape)
         features = sparse.csr_matrix(allx)
-
+        # print("features.shape:", features.shape)
+        # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         # === RGB feature
         img_dn = Image.fromarray(img).resize(
-            (W, H), Image.LANCZOS)  # [W,H 3] note!! resize的輸入是(W,H)
-        img_dn = np.asarray(img_dn)  # [H,W,3]
+            (W, H), Image.LANCZOS
+        )  # [W_downsample,H_downsample 3] note!! resize的輸入是(W,H)
+        img_dn = np.asarray(img_dn)  # [H_downsample,H_downsample,3]
         rgbxy = np.zeros(shape=(H, W, 5))
         rgbxy[:, :, :3] = img_dn / 255.  # conpress between 0~1
         # get xy feature
         for i in range(H):
             for j in range(W):
-                rgbxy[i, j, 3] = float(i)
-                rgbxy[i, j, 4] = float(j)
+                rgbxy[i, j, 3] = float(i) / H
+                rgbxy[i, j, 4] = float(j) / W
         # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
         feat = torch.FloatTensor(np.array(features.todense()))
         rgbxy_t = torch.FloatTensor(rgbxy)
@@ -223,19 +200,15 @@ class graph_voc(data.Dataset):
 
 if __name__ == "__main__":
     # test the corecness of the dataset
-    path4AFF = "AFF_MAT_normalize"  # "aff_map_normalize" | "AFF_MAT_normalize"
-    args.parse(
-        path4data="data_v8",
-        # data_RES_UP_CRF_DN_TRAIN| data_RES_UP_CRF_DN | data_RES_UP_CRF_DN_VAL
-        hid_unit=40,
-        max_epoch=250,
-        drop_rate=.3,
-        path4AffGraph=os.path.join("..", "psa", path4AFF),
-        path4train_images=args.path4train_aug_images,
-        path4partial_label="../psa/RES38_PARTIAL_PSEUDO_LABEL_DN",
-        path4node_feat="../psa/AFF_FEATURE_res38")
+    args.parse(hid_unit=40,
+               max_epoch=250,
+               drop_rate=.3,
+               path4train_images=args.path4train_aug_images,
+               path4AffGraph=os.path.join("..", "psa", "AFF_MAT_normalize"),
+               path4partial_label=os.path.join(
+                   "..", "psa", "RES38_PARTIAL_PSEUDO_LABEL_DN"),
+               path4node_feat=os.path.join("..", "psa", "AFF_FEATURE_res38"))
     dataset = graph_voc()
-    # print(dataset.train_file)
     import time
     from utils import show_timing
     t_start = time.time()

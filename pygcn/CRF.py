@@ -16,6 +16,7 @@ from cv2 import imread, imwrite
 import pydensecrf.densecrf as dcrf
 from utils import colors_map, load_img_name_list, show_timing
 from utils import evaluate_dataset_IoU, load_image_label_from_xml
+from utils import get_least_modify_file
 
 
 def crf_inference(img, probs, CRF_parameter, scale_factor=1, labels=21):
@@ -48,9 +49,9 @@ def crf_inference(img, probs, CRF_parameter, scale_factor=1, labels=21):
 
 def crf(img_name,
         CRF_parameter,
-        save_path,
+        save_path_label,
+        save_path_logit,
         img=None,
-        path4CRFLabel=None,
         probs=None,
         prediction_root=None,
         scale_factor=1,
@@ -97,18 +98,18 @@ def crf(img_name,
 
     rw_crf_resut, crf_dict = rw_crf(predicted_dict=prect_dict, name=img_name)
     # === save as dictionary
-    if not os.path.exists(save_path + "_np"):
-        os.mkdir(save_path + "_np")
-    np.save(os.path.join(save_path + "_np", img_name + '.npy'), crf_dict)
+    if not os.path.exists(save_path_logit):
+        os.makedirs(save_path_logit)
+    np.save(os.path.join(save_path_logit, img_name + '.npy'), crf_dict)
     """ ===4. save the prediction as label in save_path as .png === """
-    if not os.path.exists(save_path):
-        os.makedirs(save_path)
+    if not os.path.exists(save_path_label):
+        os.makedirs(save_path_label)
     scipy.misc.toimage(rw_crf_resut.argmax(axis=0),
                        cmin=0,
                        cmax=255,
                        pal=colors_map,
                        mode="P").save(
-                           os.path.join(save_path, img_name + '.png'))
+                           os.path.join(save_path_label, img_name + '.png'))
 
 
 def crf_deepLab(img_name,
@@ -191,9 +192,7 @@ def crf_deepLab(img_name,
                            os.path.join(save_path, img_name + '.png'))
     # >>>>>>>>>>>>>>>>>>>>>>>>>
 
-    path_pred = os.path.join("..", "..", "..", "media", getpass.getuser(),
-                             "3e2e09d9-cf24-4cc3-b5b7-46a59ab8fa24", "pygcn",
-                             "pred_semi_VCIP")
+    path_pred = os.path.join("pred_semi_VCIP")
     if not os.path.exists(path_pred):
         os.makedirs(path_pred)
     scipy.misc.toimage(logits.argmax(dim=0).numpy(),
@@ -211,31 +210,58 @@ def help():
 
 
 def apply(**kwargs):
+    """
+    Apply dense CRF in pred_root (default: the least modify folder in args.path4GCN_label)
+    ---
+    parameter:
+    - --CRF_parameter: args.CRF | args.CRF_deeplab | args.CRF_psa
+    - --path4saveCRF_label: path for save CRF label
+    - --path4saveCRF_logit: path for save CRF logit
+    - --f_list: the .txt for VOC2012 dataset (e.g. train.txt)
+    - --mode: other | rw | deeplab |  this funtion is still construct...
+    """
     parameter_dict = dict()
-    # saveInfo(method='GCN+LP')
-
     t_start = time.time()
     """Code Zone"""
     # ===predction + CRF and save the result in path4saveCRF and evaluate meanIoU
     # >>specify your >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+    time_now = datetime.datetime.today()
+    time_now = "{}_{}_{}_{}h{}m".format(time_now.year, time_now.month,
+                                        time_now.day, time_now.hour,
+                                        time_now.minute)
     descript = ""
-    args.path4prediction_np = os.path.join("predict_result_matrix_visual_new")
     parameter_dict["CRF_parameter"] = args.CRF
-    parameter_dict["f_list"] = args.path4train_images
-    parameter_dict["path4saveCRF"] = os.path.join("CRF_predict")
-    parameter_dict["pred_root"] = os.path.join(args.path4prediction_np,
-                                               str(args.max_epoch))
-    evaluate_folder = parameter_dict["path4saveCRF"]
+    parameter_dict["path4saveCRF_label"] = os.path.join(
+        args.path4Complete_label_label, time_now)
+    parameter_dict["path4saveCRF_logit"] = os.path.join(
+        args.path4Complete_label_logit, time_now)
+    parameter_dict["pred_root"] = os.path.join(
+        args.path4GCN_logit, get_least_modify_file(args.path4GCN_logit))
+    data_len = len(os.listdir(parameter_dict["pred_root"]))
+    if data_len == 10582:
+        parameter_dict["f_list"] = args.path4train_aug_images
+    elif data_len == 1464:
+        parameter_dict["f_list"] = args.path4train_images
+    elif data_len == 1449:
+        parameter_dict["f_list"] = args.path4val_images
+    elif data_len == 1456:
+        parameter_dict["f_list"] = args.path4test_images
+
+    parameter_dict["mode"] = "other"  # rw | deeplab
+    evaluate_folder = parameter_dict["path4saveCRF_label"]
     img_list = load_img_name_list(parameter_dict["f_list"])
     # === load parameter
     for k, v in kwargs.items():
         if k in parameter_dict.keys():
-            parameter_dict[k] = v
+            parameter_dict[k] = eval(v)
             print("{}: {}".format(k, parameter_dict[k]))
         else:
             print("There is no parameter: {}".format(k))
             print("use `python CRF.py help` to know how to use.")
             return
+
+    print("path4saveCRF_label: ", parameter_dict["path4saveCRF_label"])
+    print("pred_root: ", parameter_dict["pred_root"])
     for idx, img in enumerate(img_list):
         print("[{}/{}]  img: {} ==== time: {} ".format(
             idx, np.size(img_list), img,
@@ -243,7 +269,8 @@ def apply(**kwargs):
               end='\r')
         crf(img_name=img,
             prediction_root=parameter_dict["pred_root"],
-            save_path=parameter_dict["path4saveCRF"],
+            save_path_label=parameter_dict["path4saveCRF_label"],
+            save_path_logit=parameter_dict["path4saveCRF_logit"],
             CRF_parameter=parameter_dict["CRF_parameter"]
             )  # use by psa, infer_cls.py
 

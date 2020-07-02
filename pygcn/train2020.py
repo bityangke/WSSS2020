@@ -19,11 +19,13 @@ from models import GCN
 from dataset import graph_voc
 from tensorboardX import SummaryWriter
 import getpass
-from utils import IOUMetric, colors_map, evaluate_dataset_IoU, saveInfo
+from utils import IOUMetric, colors_map, evaluate_dataset_IoU
 from utils import load_image_label_from_xml, CLS_NAME_TO_ID, CLS_ID_TO_NAME
 from utils import ANNOT_FOLDER_NAME, SEG_NAME_TO_ID, SEG_ID_TO_NAME
 from utils import crf_inference_inf, load_img_name_list, show_timing
 from utils import HLoss, symmetricLoss
+import datetime
+from models import GAT, SpGAT
 
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -97,12 +99,12 @@ def postprocess_image_save(epoch,
     # >>>>>>>>>>
     up_predict_mask = torch.argmax(up_predict, dim=0)
     # === save the prediction score in dictionary
-    # === in os.path.join(args.path4save_img, str(epoch) )
+    # === in os.path.join(args.path4GCN_logit, str(epoch) )
     if save_prediction_np:
-        path = os.path.join(args.path4prediction_np, str(epoch))
+        path = args.path4GCN_logit
         if not os.path.exists(path):
             os.makedirs(path)
-            print("make folder:", path)
+            print("GCN prediction save path:", path)
         up_predict_np = torch.exp(up_predict.clone()).cpu().numpy()
         img_label = load_image_label_from_xml(img_name=img_name,
                                               voc12_root=args.path4VOC_root)
@@ -115,23 +117,9 @@ def postprocess_image_save(epoch,
                 predict_dict[idx + 1] = up_predict_np[idx + 1]
         np.save(os.path.join(path, img_name + ".npy"), predict_dict)
 
-    if save_CRF:
-        crf_score = crf_inference_inf(img_name=img_name,
-                                      img=img,
-                                      probs=up_predict.cpu().numpy(),
-                                      labels=up_predict.shape[0])
-        up_crf_mask = np.argmax(crf_score, axis=0)
-        scipy.misc.toimage(up_crf_mask,
-                           cmin=0,
-                           cmax=255,
-                           pal=colors_map,
-                           mode='P').save(
-                               os.path.join(args.path4save_img, "CRF",
-                                            img_name + '.png'))
-
     # === save the prediction as label
     # === in os.path.join(path4save, img_name + '.png')
-    path4save = os.path.join(args.path4save_img, str(epoch))
+    path4save = args.path4GCN_label
     if not os.path.isdir(path4save):
         os.makedirs(path4save)
     scipy.misc.toimage(up_predict_mask.cpu().numpy(),
@@ -246,7 +234,7 @@ def evaluate_IoU(model=None,
 
     # === model prediction w/o CRF
     mask_predit = Image.open(
-        os.path.join(args.path4save_img, str(epoch), img_name + '.png'))
+        os.path.join(args.path4GCN_label, img_name + '.png'))
     mask_predit = np.asarray(mask_predit)
 
     # === model prediction w/ LP
@@ -269,26 +257,6 @@ def evaluate_IoU(model=None,
         acc,
         mean_iu_tensor.cpu().numpy() * 100))
 
-    # === evaluate IoU_CRF
-    if use_CRF:
-        mask_crf = Image.open(
-            os.path.join(args.path4save_img, 'CRF', img_name + '.png'))
-        mask_crf = np.asarray(mask_crf)
-        # model prediction with CRF
-        mask_predit_CRF = Image.open(
-            os.path.join(args.path4save_img, 'label_propagation',
-                         img_name + '.png'))
-        mask_predit_CRF = np.asarray(mask_predit_CRF)
-        IoU_CRF.add_batch(mask_crf, mask_gt)
-        acc_CRF, acc_cls, iu, mean_iu_tensor_CRF, fwavacc = IoU_CRF.evaluate()
-        # === write in tensorboard ===
-        writer.add_scalar("IoU_with_CRF",
-                          mean_iu_tensor_CRF.cpu().numpy(),
-                          global_step=img_idx)
-        print("Acc_CRF: {:>7.2f} IoU_CRF: {:>7.2f}%\n".format(
-            acc_CRF,
-            mean_iu_tensor_CRF.cpu().numpy() * 100))
-
 
 def debug(message="", line=None):
     if line:
@@ -297,10 +265,187 @@ def debug(message="", line=None):
     input("debug---->")
 
 
-def train(**kwargs):
+def trainGAT(**kwargs):
     t_start = time.time()
     # 根据命令行参数更新配置
     args.parse(**kwargs)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # 把有改動的參數寫到tensorboard名稱上
+    comment_init = ''
+    for k, v in kwargs.items():
+        comment_init += '|{} '.format(v)
+    writer = SummaryWriter(comment=comment_init)
+
+    # === set evaluate object for evaluate later
+    IoU = IOUMetric(args.num_class)
+    IoU_CRF = IOUMetric(args.num_class)
+
+    # === dataset
+    train_dataloader = graph_voc()
+
+    for ii, data in enumerate(train_dataloader):
+        if True:
+            """ Still building................"""
+            H, W, C = data["rgbxy_t"].shape
+            A = torch.zeros([H * W, H * W], dtype=torch.float64)
+
+            def find_neibor(card_x, card_y, H, W):
+                """
+                Return idx of neibors of (x,y) in list
+                ---
+                """
+                neibors_idx = []
+                for idx_x in [card_x - 1, card_x, card_x + 1]:
+                    for idx_y in [card_y - 1, card_y, card_y + 1]:
+                        if (-1 < idx_x < H) and (-1 < idx_y < W):
+                            neibors_idx.append(
+                                (idx_x * W + idx_y, idx_x, idx_y))
+                return neibors_idx
+
+            t_start = time.time()
+            neibors = dict()
+            for node_idx in range(H * W):
+                card_x, card_y = node_idx // W, node_idx % W
+                neibors = find_neibor(card_x, card_y, H, W)
+                # print("H:{} W:{} | {} -> ({},{})".format(
+                # H, W, node_idx, card_x, card_y))
+                for nei in neibors:
+                    # print("nei: ", nei)
+                    diff = data["rgbxy_t"][
+                        card_x, card_y, :3] - data["rgbxy_t"][nei[1],
+                                                              nei[2], :3]
+                    A[node_idx, nei[0]] = torch.exp(
+                        -torch.pow(torch.norm(diff), 2) /
+                        (2. * args.CRF_deeplab["bi_rgb_std"]))
+            print("{:3.1f}s".format(time.time() - t_start))
+            D = torch.diag(A.sum(dim=1))
+            L_mat = D - A
+
+        # === Model and optimizer
+        img_label = load_image_label_from_xml(img_name=data["img_name"],
+                                              voc12_root=args.path4VOC_root)
+        img_class = [idx + 1 for idx, f in enumerate(img_label) if int(f) == 1]
+        num_class = np.max(img_class) + 1
+        # Model and optimizer
+        sparse = True
+        if sparse:
+            model = SpGAT(nfeat=data["features_t"].shape[1],
+                          nhid=args.hidden_GAT,
+                          nclass=args.num_class,
+                          dropout=args.dropout_GAT,
+                          nheads=args.nb_heads_GAT,
+                          alpha=args.alpha_GAT)
+        else:
+            model = GAT(nfeat=data["features_t"].shape[1],
+                        nhid=args.hidden_GAT,
+                        nclass=args.num_class,
+                        dropout=args.dropout_GAT,
+                        nheads=args.nb_heads_GAT,
+                        alpha=args.alpha_GAT)
+        optimizer = optim.Adam(model.parameters(),
+                               lr=args.lr_GAT,
+                               weight_decay=args.weight_decay_GAT)
+
+        # ==== moving tensor to GPU
+        if args.cuda:
+            model.to(device)
+            data["features_t"] = data["features_t"].to(device)
+            data["adj_t"] = data["adj_t"].to(device)
+            data["labels_t"] = data["labels_t"].to(device)
+            data["label_fg_t"] = data["label_fg_t"].to(device)
+            data["label_bg_t"] = data["label_bg_t"].to(device)
+            L_mat = L_mat.to(device)
+
+        # === save the prediction before training
+        if args.save_mask_before_train:
+            model.eval()
+            postprocess_image_save(img_name=data["img_name"],
+                                   model_output=model(data["features_t"],
+                                                      data["adj_t"]).detach(),
+                                   epoch=0)
+
+        # ==== Train model
+        t4epoch = time.time()
+        criterion_ent = HLoss()
+        # criterion_sym = symmetricLoss()
+        print("fg label: ", torch.unique(data["label_fg_t"]))
+        print("bg label: ", torch.unique(data["label_bg_t"]))
+        print("img_class: ", img_class)
+        for epoch in range(args.max_epoch):
+            model.train()
+            optimizer.zero_grad()
+            output = model(data["features_t"], data["adj_t"])
+            print("output.shape ", output.shape)
+            print("output....")
+            # === seperate FB/BG label
+            loss_fg = F.nll_loss(output, data["label_fg_t"], ignore_index=255)
+            loss_bg = F.nll_loss(output, data["label_bg_t"], ignore_index=255)
+            loss_entmin = criterion_ent(output,
+                                        data["labels_t"],
+                                        ignore_index=255)
+            # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
+            loss_lap = torch.trace(
+                torch.mm(output.transpose(1, 0),
+                         torch.mm(L_mat.type_as(output), output))) / (H * W)
+            gramma = 1e-3
+            loss_lap *= gramma
+            # print("gramma*loss_lap:{}".format(loss_lap.data.item()))
+            loss = loss_fg + loss_bg + loss_entmin + loss_lap
+
+            if loss is None:
+                print("skip this image: ", data["img_name"])
+                break
+
+            loss_train = loss.cuda()
+            loss_train.backward()
+            optimizer.step()
+            print("{}/{}".format(epoch, args.max_epoch))
+            # === save predcit mask of LP at max epoch & IoU of img
+            if (epoch + 1) % args.max_epoch == 0 and args.save_mask:
+                evaluate_IoU(model=model,
+                             features=data["features_t"],
+                             adj=data["adj_t"],
+                             img_name=data["img_name"],
+                             epoch=args.max_epoch,
+                             img_idx=ii + 1,
+                             writer=writer,
+                             IoU=IoU,
+                             IoU_CRF=IoU_CRF,
+                             use_CRF=False,
+                             save_prediction_np=True)
+                print("[{}/{}] time: {:.4f}s\n\n".format(
+                    ii + 1, len(train_dataloader),
+                    time.time() - t4epoch))
+        # end for epoch
+        print(
+            "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {} | loss_lap: {}"
+            .format(loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
+                    loss_entmin.data.item(), loss_lap.data.item()))
+    # end for dataloader
+    writer.close()
+    print("training was Finished!")
+    print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
+        (time.time() - t_start) // 3600, (time.time() - t_start) / 60 % 60,
+        (time.time() - t_start) % 60))
+
+
+def train(**kwargs):
+    """
+    GCN training
+    ---
+    - the folder you need:
+        - args.path4AffGraph
+        - args.path4node_feat
+        - path4partial_label
+    - these folder would be created:
+        - data/GCN_prediction/label
+        - data/GCN_prediction/logit
+    """
+    t_start = time.time()
+    # 根据命令行参数更新配置
+    args.parse(**kwargs)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # 把有改動的參數寫到tensorboard名稱上
     comment_init = ''
@@ -316,10 +461,57 @@ def train(**kwargs):
     train_dataloader = graph_voc()
 
     # === for each image, do training and testing in the same graph
+    # for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
+    #          label_bg_t) in enumerate(train_dataloader):
+    t4epoch = time.time()
     for ii, data in enumerate(train_dataloader):
+        # === use RGBXY as feature
+        # if args.use_RGBXY:
+        #     data["rgbxy_t"] = normalize_rgbxy(data["rgbxy_t"])
+        #     features_t = data["rgbxy_t"].clone()
         # === only RGB as feature
-        # adj_t = gaussian_propagator(
-        #     features=rgbxy_t.permute(2, 0, 1)[:3, :, :])
+        if True:
+            """ is constructing................ """
+            H, W, C = data["rgbxy_t"].shape
+            A = torch.zeros([H * W, H * W], dtype=torch.float64)
+
+            def find_neibor(card_x, card_y, H, W, radius=2):
+                """
+                Return idx of neibors of (x,y) in list
+                ---
+                """
+                neibors_idx = []
+                for idx_x in np.arange(card_x - radius, card_x + radius):
+                    for idx_y in np.arange(card_y - radius, card_y + radius):
+                        if (-radius < idx_x < H) and (-radius < idx_y < W):
+                            neibors_idx.append(
+                                (idx_x * W + idx_y, idx_x, idx_y))
+                return neibors_idx
+
+            t_start = time.time()
+            t_start = t4epoch
+            neibors = dict()
+            for node_idx in range(H * W):
+                card_x, card_y = node_idx // W, node_idx % W
+                neibors = find_neibor(card_x, card_y, H, W, radius=1)
+                # print("H:{} W:{} | {} -> ({},{})".format(
+                # H, W, node_idx, card_x, card_y))
+                for nei in neibors:
+                    # print("nei: ", nei)
+                    diff_rgb = data["rgbxy_t"][
+                        card_x, card_y, :3] - data["rgbxy_t"][nei[1],
+                                                              nei[2], :3]
+                    diff_xy = data["rgbxy_t"][card_x, card_y,
+                                              3:] - data["rgbxy_t"][nei[1],
+                                                                    nei[2], 3:]
+                    A[node_idx, nei[0]] = torch.exp(
+                        -torch.pow(torch.norm(diff_rgb), 2) /
+                        (2. * args.CRF_deeplab["bi_rgb_std"])) + torch.exp(
+                            -torch.pow(torch.norm(diff_xy), 2) /
+                            (2. * args.CRF_deeplab["bi_xy_std"]))
+            print("{:3.1f}s".format(time.time() - t_start))
+            D = torch.diag(A.sum(dim=1))
+            L_mat = D - A
 
         # === Model and optimizer
         img_label = load_image_label_from_xml(img_name=data["img_name"],
@@ -334,7 +526,7 @@ def train(**kwargs):
             # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
             # image label don't have BG
             # adaptive num_class should have better performance
-            nclass=num_class,  # args.num_class| num_class
+            nclass=args.num_class,  # args.num_class| num_class
             # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
             dropout=args.drop_rate)
         optimizer = optim.Adam(model.parameters(),
@@ -343,165 +535,52 @@ def train(**kwargs):
 
         # ==== moving tensor to GPU
         if args.cuda:
-            model.cuda()
-            features_t = data["features_t"].cuda()
-            adj_t = data["adj_t"].cuda()
-            data["labels_t"] = data["labels_t"].cuda()
-            data["label_fg_t"] = data["label_fg_t"].cuda()
-            data["label_bg_t"] = data["label_bg_t"].cuda()
+            model.to(device)
+            data["features_t"] = data["features_t"].to(device)
+            data["adj_t"] = data["adj_t"].to(device)
+            data["labels_t"] = data["labels_t"].to(device)
+            data["label_fg_t"] = data["label_fg_t"].to(device)
+            data["label_bg_t"] = data["label_bg_t"].to(device)
+            L_mat = L_mat.to(device)
 
         # === save the prediction before training
         if args.save_mask_before_train:
             model.eval()
             postprocess_image_save(img_name=data["img_name"],
-                                   model_output=model(features_t,
-                                                      adj_t).detach(),
+                                   model_output=model(data["features_t"],
+                                                      data["adj_t"]).detach(),
                                    epoch=0)
 
         # ==== Train model
         t4epoch = time.time()
         criterion_ent = HLoss()
-        criterion_sym = symmetricLoss()
-        print("fg label: ", torch.unique(data["label_fg_t"]))
-        print("bg label: ", torch.unique(data["label_bg_t"]))
-        print("img_class: ", img_class)
+        # criterion_sym = symmetricLoss()
+        if debug:
+            print("fg label: ", torch.unique(data["label_fg_t"]))
+            print("bg label: ", torch.unique(data["label_bg_t"]))
+            print("img_class: ", img_class)
         for epoch in range(args.max_epoch):
             model.train()
             optimizer.zero_grad()
-            output = model(features_t, adj_t)
-          
+            output = model(data["features_t"], data["adj_t"])
+
             # === seperate FB/BG label
             loss_fg = F.nll_loss(output, data["label_fg_t"], ignore_index=255)
             loss_bg = F.nll_loss(output, data["label_bg_t"], ignore_index=255)
-          
-            loss = loss_fg + loss_bg
+            # F.log_softmax(label_fg_t, dim=1)
+            loss_entmin = criterion_ent(output,
+                                        data["labels_t"],
+                                        ignore_index=255)
+            # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
+            loss_lap = torch.trace(
+                torch.mm(output.transpose(1, 0),
+                         torch.mm(L_mat.type_as(output), output))) / (H * W)
+            gamma = 1e-3
+            loss = loss_fg + loss_bg + 10. * loss_entmin + gamma * loss_lap
+            # loss = F.nll_loss(output, labels_t, ignore_index=255)
 
             if loss is None:
                 print("skip this image: ", data["img_name"])
-                break
-
-            # === calculus loss & updated parameters
-            loss_train = loss.cuda()
-            loss_train.backward()
-            optimizer.step()
-            # print(
-            #     "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {}".format(
-            #         loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
-            #         loss_entmin.data.item()))
-            # === save predcit mask of LP at max epoch & IoU of img
-            if (epoch + 1) % args.max_epoch == 0 and args.save_mask:
-                evaluate_IoU(model=model,
-                             features=features_t,
-                             adj=adj_t,
-                             img_name=data["img_name"],
-                             epoch=args.max_epoch,
-                             img_idx=ii + 1,
-                             writer=writer,
-                             IoU=IoU,
-                             IoU_CRF=IoU_CRF,
-                             use_CRF=False,
-                             save_prediction_np=True)
-                print("[{}/{}] time: {:.4f}s\n\n".format(
-                    ii + 1, len(train_dataloader),
-                    time.time() - t4epoch))
-        # end for epoch
-    # end for dataloader
-    writer.close()
-    print("training was Finished!")
-    print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
-        (time.time() - t_start) // 3600, (time.time() - t_start) / 60 % 60,
-        (time.time() - t_start) % 60))
-    saveInfo(predicted_folder=os.path.join(args.path4save_img,
-                                           str(args.max_epoch)),
-             method='GCN_LP')
-
-
-def train_laplacian(**kwargs):
-    """
-    Additional regularization loss was add to GCN (6.10)
-    ---
-    - RGB feature
-    - KNN Graph with RBF ,k=8
-    - Region Growing
-    """
-    t_start = time.time()
-    # 根据命令行参数更新配置
-    args.parse(**kwargs)
-
-    # 把有改動的參數寫到tensorboard名稱上
-    comment_init = ''
-    for k, v in kwargs.items():
-        comment_init += '|{} '.format(v)
-    writer = SummaryWriter(comment=comment_init)
-
-    # === set evaluate object for evaluate later
-    IoU = IOUMetric(args.num_class)
-    IoU_CRF = IOUMetric(args.num_class)
-
-    # === dataset
-    train_dataloader = graph_voc()
-
-    # === build RGB Laplacian graph
-
-    # === for each image, do training and testing in the same graph
-    for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
-             label_bg_t) in enumerate(train_dataloader):
-
-        # === build graph by rgbxy feature
-        if args.use_Biliteral_graph:
-            adj_t = gaussian_propagator(features=rgbxy_t)
-
-        # === Model and optimizer
-        img_label = load_image_label_from_xml(img_name=img_name,
-                                              voc12_root=args.path4VOC_root)
-        num_class = np.max(
-            [idx for idx, f in enumerate(img_label) if int(f) == 1])
-        # debug("num_class: {}  {}".format(num_class + 1, type(num_class + 1)),
-        #       line=290)
-        model = GCN(
-            nfeat=features_t.shape[1],
-            nhid=args.num_hid_unit,
-            nclass=num_class,  # image label don't have BG
-            dropout=args.drop_rate)
-        optimizer = optim.Adam(model.parameters(),
-                               lr=args.lr,
-                               weight_decay=args.weight_decay)
-
-        # ==== moving tensor to GPU
-        if args.cuda:
-            model.cuda()
-            features_t = features_t.cuda()
-            adj_t = adj_t.cuda()
-            labels_t = labels_t.cuda()
-            label_fg_t = label_fg_t.cuda()
-            label_bg_t = label_bg_t.cuda()
-
-        # === save the prediction before training
-        if args.save_mask_before_train:
-            model.eval()
-            postprocess_image_save(img_name=img_name,
-                                   model_output=model(features_t,
-                                                      adj_t).detach(),
-                                   epoch=0)
-
-        # ==== Train model
-        t4epoch = time.time()
-        criterion_ent = HLoss()
-        criterion_sym = symmetricLoss()
-        print("fg label: ", torch.unique(label_fg_t))
-        for epoch in range(args.max_epoch):
-            model.train()
-            optimizer.zero_grad()
-            output = model(features_t, adj_t)
-           
-            # === seperate FB/BG label
-            loss_fg = F.nll_loss(output, label_fg_t, ignore_index=255)
-            loss_bg = F.nll_loss(output, label_bg_t, ignore_index=255)
-           
-            loss = loss_fg + loss_bg
-
-            if loss is None:
-                print("skip this image: ", img_name)
                 break
 
             # === for normalize cut
@@ -517,20 +596,17 @@ def train_laplacian(**kwargs):
             #             torch.unsqueeze(1 - s, 1)) / (torch.dot(d, s))
 
             # === calculus loss & updated parameters
+            # loss_train = loss.cuda() + lamda * n_cut
             loss_train = loss.cuda()
             loss_train.backward()
             optimizer.step()
-            # print(
-            #     "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {}".format(
-            #         loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
-            #         loss_entmin.data.item()))
-            # === save predcit mask of LP at max epoch & IoU of img
+
+            # === save predcit mask at max epoch & IoU of img
             if (epoch + 1) % args.max_epoch == 0 and args.save_mask:
                 evaluate_IoU(model=model,
-                             features=features_t,
-                             rgbxy=rgbxy_t,
-                             adj=adj_t,
-                             img_name=img_name,
+                             features=data["features_t"],
+                             adj=data["adj_t"],
+                             img_name=data["img_name"],
                              epoch=args.max_epoch,
                              img_idx=ii + 1,
                              writer=writer,
@@ -542,37 +618,75 @@ def train_laplacian(**kwargs):
                     ii + 1, len(train_dataloader),
                     time.time() - t4epoch))
         # end for epoch
+        print(
+            "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {} | loss_lap: {}"
+            .format(loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
+                    loss_entmin.data.item(), loss_lap.data.item()))
     # end for dataloader
     writer.close()
     print("training was Finished!")
     print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
         (time.time() - t_start) // 3600, (time.time() - t_start) / 60 % 60,
         (time.time() - t_start) % 60))
-    saveInfo(predicted_folder=os.path.join(args.path4save_img,
-                                           str(args.max_epoch)),
-             method='GCN_LP')
 
 
 if __name__ == "__main__":
     # fire.Fire()
-
+    IOU_dic = {
+        .1: 78.07,
+        .2: 81.12,
+        .3: 81.65,
+        .4: 81.38,
+        .5: 80.98,
+        .7: 79.97,
+        .9: 78.83,
+        1.: 78.15
+    }
+    Occupy_dic = {
+        .1: 32.1,
+        .2: 34.53,
+        .3: 36.58,
+        .4: 38.32,
+        .5: 39.7,
+        .7: 41.65,
+        .9: 43.30,
+        1.: 44.49
+    }
+    time_now = datetime.datetime.today()
+    time_now = "{}_{}_{}_{}h{}m".format(time_now.year, time_now.month,
+                                        time_now.day, time_now.hour,
+                                        time_now.minute)
     # =======specify the paath and argument ===============
-    path4AFF = "AFF_MAT_normalize"  # "aff_map_normalize" | "AFF_MAT_normalize"
-    args.parse(hid_unit=40,
-               max_epoch=250,
-               drop_rate=.3,
-               path4AffGraph=os.path.join("..", "psa", path4AFF),
-               path4partial_label="../psa/RES38_PARTIAL_PSEUDO_LABEL_DN",
-               path4node_feat="../psa/AFF_FEATURE_res38",
-               use_LP=False)
+    args.hid_unit = 40
+    args.max_epoch = 250
+    args.drop_rate = .3
+    args.confident_ratio = .3
+    # args.path4train_images | args.path4val_images
+    args.path4train_images = args.path4train_images
+    args.path4AffGraph = os.path.join("irn", "AFF_MAT_normalize_IRNet")
+
+    args.path4partial_label_label = os.path.join(
+        args.path4partial_label_label,
+        # "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_DN"
+        "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_cam_DN"
+        .format(args.confident_ratio))
+    args.path4node_feat = os.path.join("irn", "AFF_FEATURE_res50")
+    args.use_LP = False
     descript = "dataset: {}, graph: {}, feature: {}, partial label: {}".format(
         os.path.basename(args.path4data), os.path.basename(args.path4AffGraph),
         os.path.basename(args.path4node_feat),
-        os.path.basename(args.path4partial_label))
+        os.path.basename(args.path4partial_label_label))
+    descript = "GCN prediction@IRNet@KNN laplacian @loss_ent@ PPL confident ratio={} & IOU@{} occupy@{}".format(
+        args.confident_ratio, IOU_dic[args.confident_ratio],
+        Occupy_dic[args.confident_ratio])
     print("descript ", descript)
+    print("here is branch `debug` !!")
+    # args.path4prediction_np = os.path.join(args.path4prediction_np,
+    #                                        args.path4partial_label_label)
+    args.path4GCN_label = os.path.join(args.path4GCN_label, time_now)
+    args.path4GCN_logit = os.path.join(args.path4GCN_logit, time_now)
     # ====  training  =======
     train(use_crf=False, descript=descript)
-    evaluate_dataset_IoU(file_list=args.path4train_aug_images,
-                         predicted_folder=os.path.join(args.path4save_img,
-                                                       "250"),
+    evaluate_dataset_IoU(file_list=args.path4train_images,
+                         predicted_folder=args.path4GCN_label,
                          descript=descript)

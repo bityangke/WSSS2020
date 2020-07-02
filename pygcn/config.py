@@ -26,6 +26,14 @@ class DefaultConfig(object):
     use_Biliteral_graph = False
     use_RGBXY = False
     use_LP = False
+    debug = False
+    lr_GAT = 0.005  # ', type=float, default=, help='Initial learning rate.')
+    weight_decay_GAT = 5e-4  # type=float, default=5e-4, help='Weight decay (L2 loss on parameters).')
+    hidden_GAT = 8  # type=int, default=8, help='Number of hidden units.')
+    nb_heads_GAT = 8  # type=int, default=8, help='Number of head attentions.')
+    dropout_GAT = .6  #  type=float, default=0.6, help='Dropout rate (1 - keep probability).')
+    alpha_GAT = .2  #  type=float, default=0.2, help='Alpha for the leaky_relu.')
+    patience_GAT = 100  #  type=int, default=100, help='Patience')
     # ====parameter for GCN =============================================
     lr = .01
     weight_decay = 5e-4
@@ -43,6 +51,7 @@ class DefaultConfig(object):
     store_graph = False  # type=bool
     thre4rw = .8  # type=float
     thre4confident_region = .6  # type=float
+    confident_ratio = .4
     path4PseudoLabel_LA = os.path.join("..", "psa", "VGG_LA_CRF")
     path4PseudoLabel_HA = os.path.join("..", "psa", "VGG_HA_CRF")
     path4Image = os.path.join("..", "psa", "VOC2012", "JPEGImages")
@@ -53,14 +62,21 @@ class DefaultConfig(object):
     path4VOC_root = os.path.join("..", "psa", "VOC2012")
     path4PsaFeature = os.path.join("..", "psa", "aff_map")
     pseudo_label_thre = .95  # threshold for select confident label
-    path4data = "data"
+    path4data = os.path.join("..", "..", "..", "work", getpass.getuser(),
+                             "pygcn", "data")
     path4CAM = os.path.join("..", "psa", "RES_CAM__")
     path4Pseudo_label = os.path.join("..", "psa", "RES_PSEUDO_LABEL(2020)")
+    path4boundaryMap = os.path.join("..", "irn", "result", "boundary_map")
+    path4boundaryMap_logit = os.path.join("..", "irn", "result",
+                                          "boundary_map_logit")
     # ===paeameter for dataset =====================================
     graph_path = dict()
-    graph_path['AFF'] = os.path.join("..", "psa", "aff_matrix")
-    graph_path['GT'] = os.path.join("..", "psa", "graph-full")
-    graph_path['RW'] = os.path.join("..", "psa", "VGG_RAM__")
+    graph_path['AFF'] = os.path.join("..", "..", "..", "work",
+                                     getpass.getuser(), "psa", "aff_matrix")
+    graph_path['GT'] = os.path.join("..", "..", "..", "work",
+                                    getpass.getuser(), "psa", "graph-full")
+    graph_path['RW'] = os.path.join("..", "..", "..", "work",
+                                    getpass.getuser(), "psa", "VGG_RAM__")
 
     graph_pre = dict()
     graph_pre['AFF'] = graph_pre['RW'] = ''
@@ -76,23 +92,33 @@ class DefaultConfig(object):
     # aff_matrix is graph, aff_map is node feature
     path4AffGraph = os.path.join("..", "..", "..", "work", getpass.getuser(),
                                  "psa", "aff_matrix")
-    # path4node_feat = os.path.join("..", "psa", "AFF_FEATURE_res38")
-    path4node_feat = "../psa/AFF_FEATURE_res38"
+    path4node_feat = os.path.join("..", "psa", "AFF_FEATURE_res38")
     path4train_images = os.path.join("..", "psa", "voc12", "train.txt")
     path4train_aug_images = os.path.join("..", "psa", "voc12", "train_aug.txt")
     path4val_images = os.path.join("..", "psa", "voc12", "val.txt")
     path4trainval_images = os.path.join("..", "psa", "voc12", "trainval.txt")
-    path4partial_label = "../psa/RES38_PARTIAL_PSEUDO_LABEL_DN"
+    path4partial_label_label = os.path.join("data", "partial_pseudo_label",
+                                            "label")
+    path4partial_label_logit = os.path.join("data", "partial_pseudo_label",
+                                            "logit")
     # ===paeameter for post process =====================================
-    # path4save_img = os.path.join('predict_result_visual_epochs')
-    path4save_img = os.path.join("..", "predict_result_visual_epochs")
-    path4save_LP = os.path.join("..", "LP_prediction")
+    path4GCN_logit = os.path.join("data", "GCN_prediction", "logit")
+    path4GCN_label = os.path.join("data", "GCN_prediction", "label")
+    path4Complete_label_label = os.path.join("data", "Complete_pseudo_label",
+                                             "label")
+    path4Complete_label_logit = os.path.join("data", "Complete_pseudo_label",
+                                             "logit")
+    path4Deeplab_logit = os.path.join("..", "semi_VCIP2020", "data", "logit")
+    path4save_img = os.path.join("data", "predict_result_visual_epochs")
+    path4prediction_np = os.path.join("data",
+                                      "predict_result_matrix_visual_new")
     save_prediction_np = True
-    path4prediction_np = "predict_result_matrix_visual_new"
-    # path4prediction_np = os.path.join("..", "predict_result_matrix_visual_new")
+    path4save_LP = os.path.join("LP_prediction")
     save_mask = True
     path4img = os.path.join("..", "psa", "VOC2012", "JPEGImages")
-    output_rate = 8
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> for IRNet 2020.7.2
+    output_rate = 4
+    # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
     path4saveInfo = 'evaluation4dataset.md'
     use_label_propagation = False
     use_crf = False
