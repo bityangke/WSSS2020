@@ -74,7 +74,7 @@ Apply dense CRF in pred_root (default: the least modify folder in `data/GCN_pred
     - --`pred_root`: the folder you want to apply CRF
     - --`mode`: other | rw | deeplab |  this funtion is still construct...
 
-# Apply dense CRF on Deeplab output or random walk
+## Apply dense CRF on Deeplab output or random walk
 Apply dense CRF in pred_root (default: the least modify folder in `semi_VCIP2020/data/logit`)
 >`python utils.py apply_dCRF --mode=deeplab --save_path=data/deeplab_prediction/DeepLab@Psa@CRF_DeepLabSeeting@CompletePseudoLabel_IOU57.07
 `
@@ -85,8 +85,9 @@ Apply dense CRF in pred_root (default: the least modify folder in `semi_VCIP2020
     - --`dataset`: test | val | train | train_aug (default: val)
     - --`user`:  (default: Ours)
 
-# Evaluate GCN
+## Evaluate GCN
 To evaluate the GCN
+
 Example
 >`python utils.py evaluate_dataset_IoU --predicted_folder="data/GCN_prediction/label" --file_list="../psa/voc12/train.txt" --descript="PPL iou 81.99@train"`
 - parameter:
