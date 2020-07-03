@@ -481,8 +481,9 @@ def train(**kwargs):
                 ---
                 """
                 neibors_idx = []
-                for idx_x in np.arange(card_x - radius, card_x + radius):
-                    for idx_y in np.arange(card_y - radius, card_y + radius):
+                for idx_x in np.arange(card_x - radius, card_x + radius + 1):
+                    for idx_y in np.arange(card_y - radius,
+                                           card_y + radius + 1):
                         if (-radius < idx_x < H) and (-radius < idx_y < W):
                             neibors_idx.append(
                                 (idx_x * W + idx_y, idx_x, idx_y))
