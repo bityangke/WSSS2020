@@ -46,7 +46,8 @@ class DefaultConfig(object):
     drop_rate = .3  # .5
     cuda = t.cuda.is_available()
     use_regular_NCut = False
-
+    use_lap = True
+    use_ent = True
     # == parameter for pre process =====================================
     store_graph = False  # type=bool
     thre4rw = .8  # type=float
@@ -101,9 +102,11 @@ class DefaultConfig(object):
                                             "label")
     path4partial_label_logit = os.path.join("data", "partial_pseudo_label",
                                             "logit")
+
     # ===paeameter for post process =====================================
     path4GCN_logit = os.path.join("data", "GCN_prediction", "logit")
     path4GCN_label = os.path.join("data", "GCN_prediction", "label")
+
     path4Complete_label_label = os.path.join("data", "Complete_pseudo_label",
                                              "label")
     path4Complete_label_logit = os.path.join("data", "Complete_pseudo_label",
@@ -116,6 +119,11 @@ class DefaultConfig(object):
     path4save_LP = os.path.join("LP_prediction")
     save_mask = True
     path4img = os.path.join("..", "psa", "VOC2012", "JPEGImages")
+    len2dataset = dict()
+    len2dataset[1464] = "train"
+    len2dataset[1449] = "val"
+    len2dataset[1456] = "test"
+    len2dataset[10582] = "train_aug"
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> for IRNet 2020.7.2
     output_rate = 4
     # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
@@ -144,10 +152,18 @@ class DefaultConfig(object):
     CRF = dict()
     CRF["iter_max"] = 10
     CRF["pos_w"] = 3
-    CRF["pos_xy_std"] = 4
-    CRF["bi_w"] = 3
-    CRF["bi_xy_std"] = 83
-    CRF["bi_rgb_std"] = 5
+    CRF["pos_xy_std"] = 1
+    CRF["bi_w"] = 4
+    CRF["bi_xy_std"] = 67
+    CRF["bi_rgb_std"] = 3
+
+    dataset_list = dict()
+    dataset_list["train"] = os.path.join("..", "psa", "voc12", "train.txt")
+    dataset_list["train_aug"] = os.path.join("..", "psa", "voc12",
+                                             "train_aug.txt")
+    dataset_list["val"] = os.path.join("..", "psa", "voc12", "val.txt")
+    dataset_list["trainval"] = os.path.join("..", "psa", "voc12",
+                                            "trainval.txt")
 
     # ===================================================================
 

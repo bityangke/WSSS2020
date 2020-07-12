@@ -1,4 +1,3 @@
-# coding=UTF-8
 from __future__ import division
 from __future__ import print_function
 
@@ -23,9 +22,8 @@ from utils import IOUMetric, colors_map, evaluate_dataset_IoU
 from utils import load_image_label_from_xml, CLS_NAME_TO_ID, CLS_ID_TO_NAME
 from utils import ANNOT_FOLDER_NAME, SEG_NAME_TO_ID, SEG_ID_TO_NAME
 from utils import crf_inference_inf, load_img_name_list, show_timing
-from utils import HLoss, symmetricLoss
+from utils import HLoss, symmetricLoss, plot_iou_tersorboard
 import datetime
-from models import GAT, SpGAT
 
 np.random.seed(args.seed)
 torch.manual_seed(args.seed)
@@ -265,171 +263,6 @@ def debug(message="", line=None):
     input("debug---->")
 
 
-def trainGAT(**kwargs):
-    t_start = time.time()
-    # 根据命令行参数更新配置
-    args.parse(**kwargs)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    # 把有改動的參數寫到tensorboard名稱上
-    comment_init = ''
-    for k, v in kwargs.items():
-        comment_init += '|{} '.format(v)
-    writer = SummaryWriter(comment=comment_init)
-
-    # === set evaluate object for evaluate later
-    IoU = IOUMetric(args.num_class)
-    IoU_CRF = IOUMetric(args.num_class)
-
-    # === dataset
-    train_dataloader = graph_voc()
-
-    for ii, data in enumerate(train_dataloader):
-        if True:
-            """ Still building................"""
-            H, W, C = data["rgbxy_t"].shape
-            A = torch.zeros([H * W, H * W], dtype=torch.float64)
-
-            def find_neibor(card_x, card_y, H, W):
-                """
-                Return idx of neibors of (x,y) in list
-                ---
-                """
-                neibors_idx = []
-                for idx_x in [card_x - 1, card_x, card_x + 1]:
-                    for idx_y in [card_y - 1, card_y, card_y + 1]:
-                        if (-1 < idx_x < H) and (-1 < idx_y < W):
-                            neibors_idx.append(
-                                (idx_x * W + idx_y, idx_x, idx_y))
-                return neibors_idx
-
-            t_start = time.time()
-            neibors = dict()
-            for node_idx in range(H * W):
-                card_x, card_y = node_idx // W, node_idx % W
-                neibors = find_neibor(card_x, card_y, H, W)
-                # print("H:{} W:{} | {} -> ({},{})".format(
-                # H, W, node_idx, card_x, card_y))
-                for nei in neibors:
-                    # print("nei: ", nei)
-                    diff = data["rgbxy_t"][
-                        card_x, card_y, :3] - data["rgbxy_t"][nei[1],
-                                                              nei[2], :3]
-                    A[node_idx, nei[0]] = torch.exp(
-                        -torch.pow(torch.norm(diff), 2) /
-                        (2. * args.CRF_deeplab["bi_rgb_std"]))
-            print("{:3.1f}s".format(time.time() - t_start))
-            D = torch.diag(A.sum(dim=1))
-            L_mat = D - A
-
-        # === Model and optimizer
-        img_label = load_image_label_from_xml(img_name=data["img_name"],
-                                              voc12_root=args.path4VOC_root)
-        img_class = [idx + 1 for idx, f in enumerate(img_label) if int(f) == 1]
-        num_class = np.max(img_class) + 1
-        # Model and optimizer
-        sparse = True
-        if sparse:
-            model = SpGAT(nfeat=data["features_t"].shape[1],
-                          nhid=args.hidden_GAT,
-                          nclass=args.num_class,
-                          dropout=args.dropout_GAT,
-                          nheads=args.nb_heads_GAT,
-                          alpha=args.alpha_GAT)
-        else:
-            model = GAT(nfeat=data["features_t"].shape[1],
-                        nhid=args.hidden_GAT,
-                        nclass=args.num_class,
-                        dropout=args.dropout_GAT,
-                        nheads=args.nb_heads_GAT,
-                        alpha=args.alpha_GAT)
-        optimizer = optim.Adam(model.parameters(),
-                               lr=args.lr_GAT,
-                               weight_decay=args.weight_decay_GAT)
-
-        # ==== moving tensor to GPU
-        if args.cuda:
-            model.to(device)
-            data["features_t"] = data["features_t"].to(device)
-            data["adj_t"] = data["adj_t"].to(device)
-            data["labels_t"] = data["labels_t"].to(device)
-            data["label_fg_t"] = data["label_fg_t"].to(device)
-            data["label_bg_t"] = data["label_bg_t"].to(device)
-            L_mat = L_mat.to(device)
-
-        # === save the prediction before training
-        if args.save_mask_before_train:
-            model.eval()
-            postprocess_image_save(img_name=data["img_name"],
-                                   model_output=model(data["features_t"],
-                                                      data["adj_t"]).detach(),
-                                   epoch=0)
-
-        # ==== Train model
-        t4epoch = time.time()
-        criterion_ent = HLoss()
-        # criterion_sym = symmetricLoss()
-        print("fg label: ", torch.unique(data["label_fg_t"]))
-        print("bg label: ", torch.unique(data["label_bg_t"]))
-        print("img_class: ", img_class)
-        for epoch in range(args.max_epoch):
-            model.train()
-            optimizer.zero_grad()
-            output = model(data["features_t"], data["adj_t"])
-            print("output.shape ", output.shape)
-            print("output....")
-            # === seperate FB/BG label
-            loss_fg = F.nll_loss(output, data["label_fg_t"], ignore_index=255)
-            loss_bg = F.nll_loss(output, data["label_bg_t"], ignore_index=255)
-            loss_entmin = criterion_ent(output,
-                                        data["labels_t"],
-                                        ignore_index=255)
-            # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
-            loss_lap = torch.trace(
-                torch.mm(output.transpose(1, 0),
-                         torch.mm(L_mat.type_as(output), output))) / (H * W)
-            gramma = 1e-3
-            loss_lap *= gramma
-            # print("gramma*loss_lap:{}".format(loss_lap.data.item()))
-            loss = loss_fg + loss_bg + loss_entmin + loss_lap
-
-            if loss is None:
-                print("skip this image: ", data["img_name"])
-                break
-
-            loss_train = loss.cuda()
-            loss_train.backward()
-            optimizer.step()
-            print("{}/{}".format(epoch, args.max_epoch))
-            # === save predcit mask of LP at max epoch & IoU of img
-            if (epoch + 1) % args.max_epoch == 0 and args.save_mask:
-                evaluate_IoU(model=model,
-                             features=data["features_t"],
-                             adj=data["adj_t"],
-                             img_name=data["img_name"],
-                             epoch=args.max_epoch,
-                             img_idx=ii + 1,
-                             writer=writer,
-                             IoU=IoU,
-                             IoU_CRF=IoU_CRF,
-                             use_CRF=False,
-                             save_prediction_np=True)
-                print("[{}/{}] time: {:.4f}s\n\n".format(
-                    ii + 1, len(train_dataloader),
-                    time.time() - t4epoch))
-        # end for epoch
-        print(
-            "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {} | loss_lap: {}"
-            .format(loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
-                    loss_entmin.data.item(), loss_lap.data.item()))
-    # end for dataloader
-    writer.close()
-    print("training was Finished!")
-    print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
-        (time.time() - t_start) // 3600, (time.time() - t_start) / 60 % 60,
-        (time.time() - t_start) % 60))
-
-
 def train(**kwargs):
     """
     GCN training
@@ -442,35 +275,43 @@ def train(**kwargs):
         - data/GCN_prediction/label
         - data/GCN_prediction/logit
     """
+    # os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, [0, 1, 2, 3]))
     t_start = time.time()
     # 根据命令行参数更新配置
     args.parse(**kwargs)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+    # device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda:" + str(kwargs["GPU"]))
+    print(device)
     # 把有改動的參數寫到tensorboard名稱上
-    comment_init = ''
-    for k, v in kwargs.items():
-        comment_init += '|{} '.format(v)
-    writer = SummaryWriter(comment=comment_init)
+    if kwargs["debug"] is False:
+        comment_init = ''
+        for k, v in kwargs.items():
+            comment_init += '|{} '.format(v)
+        writer = SummaryWriter(comment=comment_init)
 
     # === set evaluate object for evaluate later
     IoU = IOUMetric(args.num_class)
     IoU_CRF = IOUMetric(args.num_class)
 
     # === dataset
-    train_dataloader = graph_voc()
+    train_dataloader = graph_voc(start_idx=kwargs["start_index"],
+                                 end_idx=kwargs["end_index"],
+                                 GPU_id=kwargs["GPU"])
 
     # === for each image, do training and testing in the same graph
     # for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
     #          label_bg_t) in enumerate(train_dataloader):
     t4epoch = time.time()
     for ii, data in enumerate(train_dataloader):
+        if data is None:
+            continue
         # === use RGBXY as feature
         # if args.use_RGBXY:
         #     data["rgbxy_t"] = normalize_rgbxy(data["rgbxy_t"])
         #     features_t = data["rgbxy_t"].clone()
         # === only RGB as feature
-        if True:
+        t_be = time.time()
+        if args.use_lap:
             """ is constructing................ """
             H, W, C = data["rgbxy_t"].shape
             A = torch.zeros([H * W, H * W], dtype=torch.float64)
@@ -499,21 +340,19 @@ def train(**kwargs):
                 # H, W, node_idx, card_x, card_y))
                 for nei in neibors:
                     # print("nei: ", nei)
-                    diff_rgb = data["rgbxy_t"][
-                        card_x, card_y, :3] - data["rgbxy_t"][nei[1],
-                                                              nei[2], :3]
-                    diff_xy = data["rgbxy_t"][card_x, card_y,
-                                              3:] - data["rgbxy_t"][nei[1],
-                                                                    nei[2], 3:]
+                    diff_rgb = data["rgbxy_t"][card_x, card_y, :3] - data[
+                        "rgbxy_t"][nei[1], nei[2], :3]
+                    diff_xy = data["rgbxy_t"][card_x, card_y, 3:] - data[
+                        "rgbxy_t"][nei[1], nei[2], 3:]
                     A[node_idx, nei[0]] = torch.exp(
                         -torch.pow(torch.norm(diff_rgb), 2) /
                         (2. * args.CRF_deeplab["bi_rgb_std"])) + torch.exp(
                             -torch.pow(torch.norm(diff_xy), 2) /
                             (2. * args.CRF_deeplab["bi_xy_std"]))
-            print("{:3.1f}s".format(time.time() - t_start))
+            # print("{:3.1f}s".format(time.time() - t_start))
             D = torch.diag(A.sum(dim=1))
             L_mat = D - A
-
+        print("time for Laplacian {:3f} s".format(time.time() - t_be))
         # === Model and optimizer
         img_label = load_image_label_from_xml(img_name=data["img_name"],
                                               voc12_root=args.path4VOC_root)
@@ -542,10 +381,11 @@ def train(**kwargs):
             data["labels_t"] = data["labels_t"].to(device)
             data["label_fg_t"] = data["label_fg_t"].to(device)
             data["label_bg_t"] = data["label_bg_t"].to(device)
-            L_mat = L_mat.to(device)
+            # L_mat = L_mat.to(device)
 
         # === save the prediction before training
-        if args.save_mask_before_train:
+        if kwargs["debug"] is False:
+            # if args.save_mask_before_train:
             model.eval()
             postprocess_image_save(img_name=data["img_name"],
                                    model_output=model(data["features_t"],
@@ -553,13 +393,10 @@ def train(**kwargs):
                                    epoch=0)
 
         # ==== Train model
-        t4epoch = time.time()
+        # t4epoch = time.time()
         criterion_ent = HLoss()
         # criterion_sym = symmetricLoss()
-        if debug:
-            print("fg label: ", torch.unique(data["label_fg_t"]))
-            print("bg label: ", torch.unique(data["label_bg_t"]))
-            print("img_class: ", img_class)
+
         for epoch in range(args.max_epoch):
             model.train()
             optimizer.zero_grad()
@@ -569,15 +406,20 @@ def train(**kwargs):
             loss_fg = F.nll_loss(output, data["label_fg_t"], ignore_index=255)
             loss_bg = F.nll_loss(output, data["label_bg_t"], ignore_index=255)
             # F.log_softmax(label_fg_t, dim=1)
-            loss_entmin = criterion_ent(output,
-                                        data["labels_t"],
-                                        ignore_index=255)
             # loss_sym = criterion_sym(output, labels_t, ignore_index=255)
-            loss_lap = torch.trace(
-                torch.mm(output.transpose(1, 0),
-                         torch.mm(L_mat.type_as(output), output))) / (H * W)
-            gamma = 1e-3
-            loss = loss_fg + loss_bg + 10. * loss_entmin + gamma * loss_lap
+            loss = loss_fg + loss_bg
+            if args.use_ent:
+                loss_entmin = criterion_ent(output,
+                                            data["labels_t"],
+                                            ignore_index=255)
+                loss += 10. * loss_entmin
+            if args.use_lap:
+                loss_lap = torch.trace(
+                    torch.mm(output.transpose(1, 0),
+                             torch.mm(L_mat.type_as(output),
+                                      output))) / (H * W)
+                gamma = 1e-2
+                loss += gamma * loss_lap
             # loss = F.nll_loss(output, labels_t, ignore_index=255)
 
             if loss is None:
@@ -604,35 +446,46 @@ def train(**kwargs):
 
             # === save predcit mask at max epoch & IoU of img
             if (epoch + 1) % args.max_epoch == 0 and args.save_mask:
-                evaluate_IoU(model=model,
-                             features=data["features_t"],
-                             adj=data["adj_t"],
-                             img_name=data["img_name"],
-                             epoch=args.max_epoch,
-                             img_idx=ii + 1,
-                             writer=writer,
-                             IoU=IoU,
-                             IoU_CRF=IoU_CRF,
-                             use_CRF=False,
-                             save_prediction_np=True)
+                t_now = time.time()
+                if not kwargs["debug"]:
+                    evaluate_IoU(model=model,
+                                 features=data["features_t"],
+                                 adj=data["adj_t"],
+                                 img_name=data["img_name"],
+                                 epoch=args.max_epoch,
+                                 img_idx=ii + 1,
+                                 writer=writer,
+                                 IoU=IoU,
+                                 IoU_CRF=IoU_CRF,
+                                 use_CRF=False,
+                                 save_prediction_np=True)
                 print("[{}/{}] time: {:.4f}s\n\n".format(
-                    ii + 1, len(train_dataloader),
-                    time.time() - t4epoch))
+                    ii + 1, len(train_dataloader), t_now - t4epoch))
+                t4epoch = t_now
         # end for epoch
-        print(
-            "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {} | loss_lap: {}"
-            .format(loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
-                    loss_entmin.data.item(), loss_lap.data.item()))
+        # print(
+        #     "loss: {} | loss_fg: {} | loss_bg:{} | loss_entmin: {} | loss_lap: {}"
+        #     .format(loss.data.item(), loss_fg.data.item(), loss_bg.data.item(),
+        #             loss_entmin.data.item(), loss_lap.data.item()))
     # end for dataloader
-    writer.close()
+    if kwargs["debug"] is False:
+        writer.close()
     print("training was Finished!")
     print("Total time elapsed: {:.0f} h {:.0f} m {:.0f} s\n".format(
         (time.time() - t_start) // 3600, (time.time() - t_start) / 60 % 60,
         (time.time() - t_start) % 60))
 
 
-if __name__ == "__main__":
-    # fire.Fire()
+""" 2020.7.12 """
+
+
+def train2020(n_split=1, process_id=1, GPU_id=0, debug=False, use_lap=True):
+    """
+    Use to train whole dataset by call train()
+    ---
+    """
+    # os.environ["CUDA_VISIBLE_DEVICES"] = ','.join(map(str, [0, 1, 2, 3]))
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(GPU_id)
     IOU_dic = {
         .1: 78.07,
         .2: 81.12,
@@ -654,25 +507,28 @@ if __name__ == "__main__":
         1.: 44.49
     }
     time_now = datetime.datetime.today()
-    time_now = "{}_{}_{}_{}h{}m".format(time_now.year, time_now.month,
-                                        time_now.day, time_now.hour,
-                                        time_now.minute)
+    time_now = "{}_{}_{}_{}h".format(time_now.year, time_now.month,
+                                     time_now.day, time_now.hour)
     # =======specify the paath and argument ===============
     args.hid_unit = 40
     args.max_epoch = 250
     args.drop_rate = .3
-    args.confident_ratio = .3
+    args.confident_ratio = 0.3
     # args.path4train_images | args.path4val_images
     args.path4train_images = args.path4train_images
-    args.path4AffGraph = os.path.join("irn", "AFF_MAT_normalize_IRNet")
+    if getpass.getuser() == "u7577591":
+        args.path4AffGraph = os.path.join("/work/u7577591/irn",
+                                          "AFF_MAT_normalize_IRNet")
 
     args.path4partial_label_label = os.path.join(
         args.path4partial_label_label,
         # "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_DN"
-        "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_cam_DN"
+        "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_cam_DN_johnney"
         .format(args.confident_ratio))
-    args.path4node_feat = os.path.join("irn", "AFF_FEATURE_res50")
+    args.path4node_feat = os.path.join(
+        "../../../work/" + getpass.getuser() + "/irn", "AFF_FEATURE_res50_W")
     args.use_LP = False
+    args.use_lap = use_lap
     descript = "dataset: {}, graph: {}, feature: {}, partial label: {}".format(
         os.path.basename(args.path4data), os.path.basename(args.path4AffGraph),
         os.path.basename(args.path4node_feat),
@@ -686,8 +542,98 @@ if __name__ == "__main__":
     #                                        args.path4partial_label_label)
     args.path4GCN_label = os.path.join(args.path4GCN_label, time_now)
     args.path4GCN_logit = os.path.join(args.path4GCN_logit, time_now)
+    # ====  training  in split dataset =======
+    len_dataset = len(load_img_name_list(args.path4train_images))
+    # n_split = 5
+    # process_id = __file__
+    # process_id = process_id[-4]
+    chunk = int(np.ceil(len_dataset / n_split))
+    start_idx = chunk * (int(process_id) - 1)
+    end_idx = start_idx + chunk if (start_idx +
+                                    chunk) < len_dataset else len_dataset
     # ====  training  =======
-    train(use_crf=False, descript=descript)
-    evaluate_dataset_IoU(file_list=args.path4train_images,
-                         predicted_folder=args.path4GCN_label,
-                         descript=descript)
+    train(use_crf=False,
+          descript=descript,
+          start_index=start_idx,
+          end_index=end_idx,
+          GPU=GPU_id,
+          debug=debug)
+    # ===== plot iou on tersorboard  and evaluate the mean IOU ======
+    if len(os.listdir(args.path4GCN_label)) == len(
+            load_img_name_list(args.path4train_images)):
+
+        plot_iou_tersorboard(predicted_folder=args.path4GCN_label)
+        evaluate_dataset_IoU(predicted_folder=args.path4GCN_label,
+                             file_list=args.path4train_images)
+
+
+if __name__ == "__main__":
+    fire.Fire()
+    # IOU_dic = {
+    #     .1: 78.07,
+    #     .2: 81.12,
+    #     .3: 81.65,
+    #     .4: 81.38,
+    #     .5: 80.98,
+    #     .7: 79.97,
+    #     .9: 78.83,
+    #     1.: 78.15
+    # }
+    # Occupy_dic = {
+    #     .1: 32.1,
+    #     .2: 34.53,
+    #     .3: 36.58,
+    #     .4: 38.32,
+    #     .5: 39.7,
+    #     .7: 41.65,
+    #     .9: 43.30,
+    #     1.: 44.49
+    # }
+    # time_now = datetime.datetime.today()
+    # time_now = "{}_{}_{}_{}h".format(time_now.year, time_now.month,
+    #                                  time_now.day, time_now.hour)
+    # # =======specify the paath and argument ===============
+    # args.hid_unit = 40
+    # args.max_epoch = 250
+    # args.drop_rate = .3
+    # args.confident_ratio = 0.3
+    # # args.path4train_images | args.path4val_images
+    # args.path4train_images = args.path4train_images
+    # args.path4AffGraph = os.path.join("../pygcn/irn",
+    #                                   "AFF_MAT_normalize_IRNet")
+
+    # args.path4partial_label_label = os.path.join(
+    #     args.path4partial_label_label,
+    #     # "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_DN"
+    #     "RES_CAM_TRAIN_AUG_PARTIAL_PSEUDO_LABEL@PIL_near@confident_ratio_{}_cam_DN_johnney"
+    #     .format(args.confident_ratio))
+    # args.path4node_feat = os.path.join(
+    #     "../../../work/" + getpass.getuser() + "/irn", "AFF_FEATURE_res50_W")
+    # args.use_LP = False
+    # descript = "dataset: {}, graph: {}, feature: {}, partial label: {}".format(
+    #     os.path.basename(args.path4data), os.path.basename(args.path4AffGraph),
+    #     os.path.basename(args.path4node_feat),
+    #     os.path.basename(args.path4partial_label_label))
+    # descript = "GCN prediction@IRNet@KNN laplacian @loss_ent@ PPL confident ratio={} & IOU@{} occupy@{}".format(
+    #     args.confident_ratio, IOU_dic[args.confident_ratio],
+    #     Occupy_dic[args.confident_ratio])
+    # print("descript ", descript)
+    # print("here is branch `debug` !!")
+    # # args.path4prediction_np = os.path.join(args.path4prediction_np,
+    # #                                        args.path4partial_label_label)
+    # args.path4GCN_label = os.path.join(args.path4GCN_label, time_now)
+    # args.path4GCN_logit = os.path.join(args.path4GCN_logit, time_now)
+    # # ====  training  in split dataset =======
+    # len_dataset = len(load_img_name_list(args.path4train_images))
+    # n_split = 5
+    # # process_id = __file__
+    # # process_id = process_id[-4]
+    # chunk = int(np.ceil(len_dataset / n_split))
+    # start_idx = chunk * (int(process_id) - 1)
+    # end_idx = start_idx + chunk if (start_idx +
+    #                                 chunk) < len_dataset else len_dataset
+    # # ====  training  =======
+    # train(use_crf=False,
+    #       descript=descript,
+    #       start_index=start_idx,
+    #       end_index=end_idx)
