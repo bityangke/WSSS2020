@@ -30,12 +30,11 @@ def normalize_t(mx):
     return mx
 
 
-def preprocess_adj(aff_mat):
-    adj = torch.Tensor(aff_mat).cuda()
-    adjT = torch.t(adj)
-    adj = torch.stack([adj, adjT])
+def preprocess_adj(aff_mat, device):
+    adjT = torch.t(aff_mat)
+    adj = torch.stack([aff_mat, adjT])
     adj, _ = adj.max(dim=0)
-    return normalize_t(adj + torch.eye(adj.shape[0]).cuda())
+    return normalize_t(adj + torch.eye(adj.shape[0]).to(device))
 
 
 class graph_voc(data.Dataset):
@@ -48,7 +47,7 @@ class graph_voc(data.Dataset):
                  skip_untill=-1,
                  start_idx=0,
                  end_idx=None,
-                 GPU_id=None):
+                 device=None):
         self.label_list = load_img_name_list(args.path4train_images)
         self.seg_label_dict = dict()
         self.test = test
@@ -60,8 +59,8 @@ class graph_voc(data.Dataset):
             self.end_idx = len(self.label_list)
         else:
             self.end_idx = end_idx
-        self.GPU_id = GPU_id
-        print("self.end_idx: ", self.end_idx)
+        self.device = device
+        print("self.device: ", self.device)
         # self.ignore_list = [
         #     f.split(".")[0] for f in os.listdir(
         #         "/home/u7577591/pygcn/data/GCN_prediction/label/2020_7_9_17h"
@@ -101,12 +100,14 @@ class graph_voc(data.Dataset):
         # adj = adj + adj.T.multiply(adj.T > adj) - adj.multiply(
         #     adj.T > adj)  # symmetrilize
         # adj = normalize(adj + sp.eye(adj.shape[0]))
-        device = torch.device("cuda:" + str(self.GPU_id))
-        adj = normalize_t(torch.FloatTensor(graph).to(device))
+        # adj = torch.FloatTensor(adj.todense())
         # === build symmetric adjacency matrix from graph
         # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
-        load_adjacency_mat = False
+        # device = torch.device("cuda:" + str(self.GPU_id))
+        adj = preprocess_adj(
+            torch.FloatTensor(graph).to(self.device), self.device)
         # >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+        load_adjacency_mat = False
         if load_adjacency_mat:
             if getpass.getuser() == "u7577591":
                 adj = np.load("../../../work/" + getpass.getuser() +
@@ -117,6 +118,7 @@ class graph_voc(data.Dataset):
                     "../../../work/" + getpass.getuser() +
                     "/daa732df-bd2b-4ef5-ae94-73da0de250fb/irn/AFF_MAT_normalize_IRNet_adj/"
                     + img_name + ".npy")
+            adj = torch.FloatTensor(adj)
         """ === compute foreground & background === """
         # because (np.int8) will turn 255 -> -1,
         """ ===           generate bg label and fg label           ===
@@ -202,7 +204,7 @@ class graph_voc(data.Dataset):
         feat = torch.FloatTensor(np.array(features.todense()))
         rgbxy_t = torch.FloatTensor(rgbxy)
         # adj = sparse_mx_to_torch_sparse_tensor(adj)
-        # adj = torch.FloatTensor(adj)
+
         return {
             "adj_t": adj,
             "features_t": feat,

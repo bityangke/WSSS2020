@@ -42,8 +42,6 @@ def postprocess_image_save(epoch,
     2.save prediction scores (option)
     3.save prediction mask
     """
-    print("=== Post Processing...")
-
     # load image as nd_array
     img = imread(os.path.join(args.path4img, img_name + ".jpg"))
     H_original, W_original, C = img.shape
@@ -54,7 +52,6 @@ def postprocess_image_save(epoch,
     model_output = model_output.reshape(H, W,
                                         model_output.size()[-1]).permute(
                                             2, 0, 1)
-    print("model_output.shape: {}".format(model_output.shape))
     # === use bilinear to upsample the predicted mask
     upsampling = torch.nn.Upsample(size=(H_original, W_original),
                                    mode='bilinear',
@@ -296,7 +293,7 @@ def train(**kwargs):
     # === dataset
     train_dataloader = graph_voc(start_idx=kwargs["start_index"],
                                  end_idx=kwargs["end_index"],
-                                 GPU_id=kwargs["GPU"])
+                                 device=device)
 
     # === for each image, do training and testing in the same graph
     # for ii, (adj_t, features_t, labels_t, rgbxy_t, img_name, label_fg_t,
@@ -384,8 +381,7 @@ def train(**kwargs):
             # L_mat = L_mat.to(device)
 
         # === save the prediction before training
-        if kwargs["debug"] is False:
-            # if args.save_mask_before_train:
+        if args.save_mask_before_train:
             model.eval()
             postprocess_image_save(img_name=data["img_name"],
                                    model_output=model(data["features_t"],
